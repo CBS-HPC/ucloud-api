@@ -1,0 +1,14 @@
+.venv/
+.env
+__pycache__/
+.pytest_cache/
+.ruff_cache/
+dist/
+build/
+artifacts/
+deliveries/
+examples/dummy_output.txt
+*.pyc
+*.pyo
+*.pyd
+*.zip
