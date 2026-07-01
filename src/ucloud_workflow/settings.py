@@ -4,6 +4,8 @@ from dataclasses import dataclass
 from pathlib import Path
 import os
 
+from .catalog import resolve_template_job_id
+
 
 class SettingsError(RuntimeError):
     """Raised when required UCloud settings are missing."""
@@ -114,3 +116,6 @@ class Settings:
     @property
     def mount_paths(self) -> list[str]:
         return [self.mount_path] if self.mount_path else []
+
+    def template_job_id_for(self, profile_name: str | None = None) -> str | None:
+        return resolve_template_job_id(profile_name, self.template_job_id)

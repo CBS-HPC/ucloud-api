@@ -19,6 +19,9 @@ def main() -> int:
     result = run_ssh_transfer_demo(settings)
     print("=== Local output ===")
     print(result.local_output_path)
+    if result.job_report_path is not None:
+        print("=== Job report ===")
+        print(result.job_report_path)
     print("=== Remote job directory ===")
     print(result.remote_dir)
     return 0

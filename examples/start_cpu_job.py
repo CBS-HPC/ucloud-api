@@ -46,7 +46,7 @@ def main() -> int:
             size=settings.default_size,
             hours=settings.default_hours,
             name=f"python-cpu-draft-{datetime.now(timezone.utc).strftime('%Y%m%d-%H%M%S')}",
-            mounts=settings.mount_paths,
+            mounts=[],
             template_job_id=settings.template_job_id,
         )
         try:

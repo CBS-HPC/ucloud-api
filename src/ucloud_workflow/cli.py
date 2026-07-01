@@ -7,6 +7,14 @@ import rich.console
 import rich.table
 import typer
 
+from .catalog import (
+    MACHINE_CATALOG,
+    STANDARD_JOB_PROFILES,
+    TEMPLATE_JOB_CATALOG,
+    machine_products_for_profile,
+    profile_by_name,
+)
+from . import __version__
 from .client import UCloudClient
 from .delivery import DeliveryBundleSpec, create_delivery_bundle
 from .jobs import (
@@ -23,15 +31,18 @@ from .transfer import (
     run_remote_python_job,
     run_ssh_transfer_demo,
 )
+from .utilization import analyze_job_report, render_utilization_analysis
 
 app = typer.Typer(add_completion=False, help="UCloud workflow toolkit")
 jobs_app = typer.Typer(help="Job lifecycle commands")
 delivery_app = typer.Typer(help="Data delivery packaging")
 workflow_app = typer.Typer(help="End-to-end helpers for points 5 and 6")
+catalog_app = typer.Typer(help="Catalog of standard job types and machine types")
 
 app.add_typer(jobs_app, name="jobs")
 app.add_typer(delivery_app, name="delivery")
 app.add_typer(workflow_app, name="workflow")
+app.add_typer(catalog_app, name="catalog")
 
 console = rich.console.Console()
 
@@ -54,6 +65,23 @@ def _load_settings(
         default_size=default_size,
         default_hours=default_hours,
     )
+
+
+def _resolve_template_job_id(settings: Settings, profile: str | None) -> str | None:
+    try:
+        return settings.template_job_id_for(profile)
+    except ValueError as exc:
+        raise typer.BadParameter(str(exc)) from exc
+
+
+def _join_notes(notes: tuple[str, ...]) -> str:
+    return "; ".join(notes) if notes else "-"
+
+
+@app.command("version")
+def version() -> None:
+    """Print the installed package version."""
+    console.print(f"ucloud-workflow {__version__}")
 
 
 @app.command()
@@ -80,6 +108,7 @@ def submit_job(
     size: str = typer.Option(None, help="UCloud CPU size, for example 128-vcpu"),
     hours: int | None = typer.Option(None, help="Time allocation in hours"),
     name: str | None = typer.Option(None, help="Optional job name"),
+    profile: str | None = typer.Option(None, help="Standard job profile name, for example vscode-remote-session"),
     mount: list[str] = typer.Option([], "--mount", help="UCloud file or folder path to mount (repeatable)"),
     read_only_mount: list[str] = typer.Option(
         [],
@@ -93,6 +122,7 @@ def submit_job(
 ) -> None:
     """Submit a job by cloning the latest template."""
     settings = _load_settings(server=server, token=token, project=project)
+    template_job_id = _resolve_template_job_id(settings, profile)
     with UCloudClient(settings) as client:
         result = submit_job_from_latest_template(
             client,
@@ -101,7 +131,7 @@ def submit_job(
             name=name,
             mounts=mount,
             read_only_mounts=read_only_mount,
-            template_job_id=settings.template_job_id,
+            template_job_id=template_job_id,
         )
     console.print(f"Job submitted: {result.job_id}")
     console.print(f"Job URL: {result.job_url}")
@@ -185,6 +215,7 @@ def run_workflow(
     size: str = typer.Option(None, help="UCloud CPU size"),
     hours: int | None = typer.Option(None, help="Time allocation in hours"),
     name: str | None = typer.Option(None, help="Optional job name"),
+    profile: str | None = typer.Option(None, help="Standard job profile name, for example cpu-python-batch"),
     mount: list[str] = typer.Option([], "--mount", help="UCloud file or folder path to mount (repeatable)"),
     read_only_mount: list[str] = typer.Option(
         [],
@@ -209,6 +240,7 @@ def run_workflow(
         default_size=size,
         default_hours=hours,
     )
+    template_job_id = _resolve_template_job_id(settings, profile)
     with UCloudClient(settings) as client:
         launched = submit_job_from_latest_template(
             client,
@@ -217,7 +249,7 @@ def run_workflow(
             name=name,
             mounts=mount,
             read_only_mounts=read_only_mount,
-            template_job_id=settings.template_job_id,
+            template_job_id=template_job_id,
         )
         job, ssh_command = wait_for_running_job(client, launched.job_id)
         update_ssh_config(ssh_command, alias=settings.ssh_alias, config_path=settings.ssh_config_path)
@@ -232,16 +264,19 @@ def run_workflow(
 def ssh_transfer(
     delay_seconds: float = typer.Option(3.0, "--delay", help="Delay before the dummy output is written"),
     poll_seconds: int = typer.Option(2, "--poll", help="Polling interval in seconds"),
+    profile: str | None = typer.Option(None, help="Standard job profile name for the transfer demo"),
     server: str | None = typer.Option(None, help="UCloud server URL"),
     token: str | None = typer.Option(None, help="Bearer token"),
     project: str | None = typer.Option(None, help="Project header"),
 ) -> None:
     """Run the SSH transfer demo and terminate the job after the dummy output is downloaded."""
     settings = _load_settings(server=server, token=token, project=project)
+    template_job_id = _resolve_template_job_id(settings, profile)
     result = run_ssh_transfer_demo(
         settings,
         delay_seconds=delay_seconds,
         poll_seconds=poll_seconds,
+        template_job_id=template_job_id,
     )
     console.print(f"Job submitted: {result.job_id}")
     console.print(f"Local output file: {result.local_output_path}")
@@ -285,6 +320,7 @@ def python_job(
     size: str = typer.Option(None, help="UCloud CPU size"),
     hours: int | None = typer.Option(None, help="Time allocation in hours"),
     name: str | None = typer.Option(None, help="Optional job name"),
+    profile: str | None = typer.Option(None, help="Standard job profile name for the batch runner"),
     server: str | None = typer.Option(None, help="UCloud server URL"),
     token: str | None = typer.Option(None, help="Bearer token"),
     project: str | None = typer.Option(None, help="Project header"),
@@ -301,6 +337,7 @@ def python_job(
         default_size=size,
         default_hours=hours,
     )
+    template_job_id = _resolve_template_job_id(settings, profile)
 
     upload_paths = list(upload)
     setup_commands = list(install_command)
@@ -316,12 +353,136 @@ def python_job(
         output_paths=tuple(output),
         local_output_root=local_output_root,
     )
-    result = run_remote_python_job(settings, spec, name=name)
+    result = run_remote_python_job(settings, spec, name=name, template_job_id=template_job_id)
 
     console.print(f"Job submitted: {result.job_id}")
     console.print(f"Local output directory: {result.local_output_dir}")
     console.print(f"Downloaded files: {len(result.downloaded_paths)}")
+    if result.job_report_path is not None:
+        console.print(f"Job report: {result.job_report_path}")
     console.print(f"Remote job directory: {result.remote_dir}")
+
+
+@workflow_app.command("analyze-utilization")
+def analyze_utilization(
+    report: Path = typer.Argument(..., exists=True, dir_okay=False, help="Path to a job-report.csv file"),
+    current_machine: str | None = typer.Option(
+        None,
+        "--current-machine",
+        help="Optional current UCloud product id for a next-machine suggestion",
+    ),
+    output: Path | None = typer.Option(None, help="Optional markdown file to write the analysis to"),
+) -> None:
+    """Analyze a utilization report and recommend a machine-size direction."""
+    analysis = analyze_job_report(report, current_machine_product=current_machine)
+    rendered = render_utilization_analysis(analysis)
+    console.print(rendered)
+    if output is not None:
+        output.parent.mkdir(parents=True, exist_ok=True)
+        output.write_text(rendered, encoding="utf-8")
+        console.print(f"Wrote analysis to {output}")
+
+
+@catalog_app.command("profiles")
+def list_profiles() -> None:
+    """List the standard job profiles."""
+    table = rich.table.Table(title="Standard UCloud job profiles")
+    table.add_column("Profile key", style="cyan")
+    table.add_column("Display name", style="white")
+    table.add_column("Category", style="magenta")
+    table.add_column("Template env var", style="green")
+    table.add_column("Machine families", style="white")
+    table.add_column("SSH", style="yellow")
+    table.add_column("Utilization", style="yellow")
+    table.add_column("Notes", style="white")
+    for profile in STANDARD_JOB_PROFILES:
+        table.add_row(
+            profile.name,
+            profile.display_name,
+            profile.category,
+            profile.template_env_var,
+            ", ".join(profile.preferred_machine_families),
+            "yes" if profile.requires_ssh else "no",
+            "yes" if profile.supports_utilization_report else "no",
+            _join_notes(profile.notes),
+        )
+    console.print(table)
+
+
+@catalog_app.command("templates")
+def list_template_jobs() -> None:
+    """List the template job catalog and the environment variables used to resolve it."""
+    table = rich.table.Table(title="UCloud template job catalog")
+    table.add_column("Entry", style="cyan")
+    table.add_column("Profile key", style="white")
+    table.add_column("Template env var", style="green")
+    table.add_column("Current value", style="white")
+    table.add_column("Purpose", style="white")
+    table.add_column("Notes", style="white")
+    for entry in TEMPLATE_JOB_CATALOG:
+        current_value = entry.current_value or "-"
+        table.add_row(
+            entry.display_name,
+            entry.profile_name,
+            entry.env_var,
+            current_value,
+            entry.purpose,
+            _join_notes(entry.notes),
+        )
+    console.print(table)
+
+
+@catalog_app.command("machines")
+def list_machines(
+    profile: str | None = typer.Option(None, help="Optional standard job profile to filter machine types"),
+) -> None:
+    """List the known machine types documented by UCloud."""
+    if profile is not None:
+        resolved_profile = profile_by_name(profile)
+        if resolved_profile is None:
+            raise typer.BadParameter(f"Unknown job profile: {profile!r}")
+        machines = machine_products_for_profile(resolved_profile.name)
+    else:
+        machines = MACHINE_CATALOG
+
+    table = rich.table.Table(title="UCloud machine types")
+    table.add_column("Product", style="cyan")
+    table.add_column("Provider", style="white")
+    table.add_column("Class", style="magenta")
+    table.add_column("vCPUs", style="yellow")
+    table.add_column("CPU model", style="white")
+    table.add_column("RAM GiB", style="yellow")
+    table.add_column("Memory type", style="white")
+    table.add_column("GPUs", style="yellow")
+    table.add_column("GPU model", style="white")
+    table.add_column("MIG instances", style="yellow")
+    table.add_column("MIG profile", style="white")
+    table.add_column("Core-hours/hour", style="yellow")
+    table.add_column("GPU-hours/hour", style="yellow")
+    table.add_column("Status", style="green")
+    table.add_column("Notes", style="white")
+    for machine in machines:
+        gpu_hours_display = machine.gpu_hours_label or (
+            "-" if machine.gpu_hours_per_hour is None else str(machine.gpu_hours_per_hour)
+        )
+        table.add_row(
+            machine.product,
+            machine.provider,
+            machine.machine_class,
+            "-" if machine.cpu_vcpus is None else str(machine.cpu_vcpus),
+            machine.cpu_model or "-",
+            "-" if machine.memory_gib is None else str(machine.memory_gib),
+            machine.memory_type or "-",
+            "-" if machine.gpu_count is None else str(machine.gpu_count),
+            machine.gpu_model or "-",
+            "-" if machine.mig_instances is None else str(machine.mig_instances),
+            machine.mig_profile or "-",
+            "-" if machine.core_hours_per_hour is None else str(machine.core_hours_per_hour),
+            gpu_hours_display,
+            machine.status or "-",
+            _join_notes(machine.notes),
+        )
+    console.print(table)
 
 
 if __name__ == "__main__":

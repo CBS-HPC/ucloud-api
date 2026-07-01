@@ -42,6 +42,7 @@ def test_remote_job_directory_uses_unique_subdirectory() -> None:
         server="https://cloud.sdu.dk",
         token="token",
         project="Moody's Datahub",
+        mount_path="/8983017/moody_agent/",
         work_folder="/work/moody_agent",
     )
 
@@ -93,6 +94,7 @@ def test_run_remote_python_job_uploads_script_package_and_downloads_outputs(
         server="https://cloud.sdu.dk",
         token="token",
         project="Moody's Datahub",
+        mount_path="/8983017/moody_agent/",
         work_folder="/work/moody_agent",
     )
 
@@ -101,6 +103,7 @@ def test_run_remote_python_job_uploads_script_package_and_downloads_outputs(
     uploaded_paths: list[tuple[str, str]] = []
     remote_commands: list[str] = []
     downloaded_paths: list[Path] = []
+    analysis_calls: list[tuple[Path, str | None]] = []
 
     class DummyClient:
         def __init__(self, _settings: Settings) -> None:
@@ -119,13 +122,24 @@ def test_run_remote_python_job_uploads_script_package_and_downloads_outputs(
     monkeypatch.setattr(
         transfer,
         "submit_job_from_latest_template",
-        lambda client, **kwargs: submitted_kwargs.update(kwargs) or SimpleNamespace(job_id="job-abc123"),
+        lambda client, **kwargs: (
+            submitted_kwargs.update(kwargs)
+            or SimpleNamespace(job_id="job-abc123", product_id="cpu-amd-zen5-128-vcpu")
+        ),
     )
     monkeypatch.setattr(transfer, "wait_for_running_job", lambda client, job_id: ({}, "ssh ucloud@host -p 22"))
     monkeypatch.setattr(transfer, "update_ssh_config", lambda *args, **kwargs: None)
     monkeypatch.setattr(transfer, "remote_mkdir", lambda *args, **kwargs: None)
     monkeypatch.setattr(transfer, "remote_path_exists", lambda *args, **kwargs: True)
     monkeypatch.setattr(transfer, "remote_dir_list", lambda *args, **kwargs: "main.py\nmypkg")
+    monkeypatch.setattr(
+        transfer,
+        "analyze_job_report",
+        lambda report_path, *, current_machine_product=None: (
+            analysis_calls.append((report_path, current_machine_product)) or SimpleNamespace()
+        ),
+    )
+    monkeypatch.setattr(transfer, "render_utilization_analysis", lambda analysis: "utilization analysis")
     monkeypatch.setattr(
         transfer,
         "scp_upload",
@@ -170,9 +184,17 @@ def test_run_remote_python_job_uploads_script_package_and_downloads_outputs(
     assert downloaded_paths == [
         result.local_output_dir / "output/result.txt",
         result.local_output_dir / "run.log",
+        result.local_output_dir / "job-report.csv",
     ]
-    assert result.downloaded_paths == tuple(downloaded_paths)
+    assert result.downloaded_paths == (
+        result.local_output_dir / "output/result.txt",
+        result.local_output_dir / "run.log",
+    )
     assert result.local_output_dir == tmp_path / "artifacts" / result.run_id
+    assert result.job_report_path == result.local_output_dir / "job-report.csv"
+    assert analysis_calls == [
+        (result.local_output_dir / "job-report.csv", "cpu-amd-zen5-128-vcpu"),
+    ]
     assert terminated_job_ids == ["job-abc123"]
 
 
@@ -191,6 +213,8 @@ def test_run_ssh_transfer_demo_uploads_static_files_and_downloads_output(
     terminated_job_ids: list[str] = []
     submitted_kwargs: dict[str, object] = {}
     uploaded_paths: list[tuple[str, str]] = []
+    downloaded_paths: list[Path] = []
+    analysis_calls: list[tuple[Path, str | None]] = []
 
     class DummyClient:
         def __init__(self, _settings: Settings) -> None:
@@ -209,7 +233,10 @@ def test_run_ssh_transfer_demo_uploads_static_files_and_downloads_output(
     monkeypatch.setattr(
         transfer,
         "submit_job_from_latest_template",
-        lambda client, **kwargs: submitted_kwargs.update(kwargs) or SimpleNamespace(job_id="job-abc123"),
+        lambda client, **kwargs: (
+            submitted_kwargs.update(kwargs)
+            or SimpleNamespace(job_id="job-abc123", product_id="cpu-amd-zen5-128-vcpu")
+        ),
     )
     monkeypatch.setattr(transfer, "wait_for_running_job", lambda client, job_id: ({}, "ssh ucloud@host -p 22"))
     monkeypatch.setattr(transfer, "update_ssh_config", lambda *args, **kwargs: None)
@@ -218,8 +245,25 @@ def test_run_ssh_transfer_demo_uploads_static_files_and_downloads_output(
     monkeypatch.setattr(transfer, "remote_dir_list", lambda *args, **kwargs: "worker.py\ndummy_input.txt")
     monkeypatch.setattr(
         transfer,
+        "analyze_job_report",
+        lambda report_path, *, current_machine_product=None: (
+            analysis_calls.append((report_path, current_machine_product)) or SimpleNamespace()
+        ),
+    )
+    monkeypatch.setattr(transfer, "render_utilization_analysis", lambda analysis: "utilization analysis")
+    monkeypatch.setattr(
+        transfer,
         "scp_upload",
         lambda alias, local_path, remote_path: uploaded_paths.append((Path(local_path).name, remote_path)),
+    )
+    monkeypatch.setattr(
+        transfer,
+        "scp_download",
+        lambda alias, remote_path, local_path: (
+            local_path.parent.mkdir(parents=True, exist_ok=True),
+            downloaded_paths.append(local_path),
+            local_path.write_text("downloaded", encoding="utf-8"),
+        ),
     )
     monkeypatch.setattr(transfer, "start_remote_worker", lambda *args, **kwargs: "999")
     monkeypatch.setattr(
@@ -239,8 +283,13 @@ def test_run_ssh_transfer_demo_uploads_static_files_and_downloads_output(
         ("worker.py", f"{result.remote_dir}/worker.py"),
         ("dummy_input.txt", f"{result.remote_dir}/dummy_input.txt"),
     ]
+    assert downloaded_paths == [examples_dir / "job-report.csv"]
     assert result.local_output_path == examples_dir / "dummy_output.txt"
     assert result.local_output_path.read_text(encoding="utf-8") == "dummy output"
+    assert result.job_report_path == examples_dir / "job-report.csv"
+    assert analysis_calls == [
+        (examples_dir / "job-report.csv", "cpu-amd-zen5-128-vcpu"),
+    ]
     assert terminated_job_ids == ["job-abc123"]
 
 

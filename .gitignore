@@ -7,7 +7,9 @@ dist/
 build/
 artifacts/
 deliveries/
+job-report.csv
 examples/dummy_output.txt
+examples/job-report.csv
 *.pyc
 *.pyo
 *.pyd

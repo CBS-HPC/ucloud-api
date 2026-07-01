@@ -21,6 +21,7 @@ class JobLaunchResult:
     job_id: str
     ssh_command: str
     job_url: str
+    product_id: str | None = None
 
 
 def _normalize_ucloud_path(path: str) -> str:
@@ -130,7 +131,7 @@ def build_job_specification(
 ) -> dict[str, Any]:
     specification = clean_specification(template)
     specification["product"] = {
-        "id": f"cpu-amd-zen5-{size}",
+        "id": build_cpu_product_id(size),
         "category": "cpu-amd-zen5",
         "provider": "ucloud",
     }
@@ -145,6 +146,13 @@ def build_job_specification(
     if name:
         specification["name"] = name
     return specification
+
+
+def build_cpu_product_id(size: str) -> str:
+    clean_size = size.strip()
+    if not clean_size:
+        raise ValueError("size must not be empty")
+    return f"cpu-amd-zen5-{clean_size}"
 
 
 def extract_job_id(submission_response: Mapping[str, Any]) -> str:
@@ -185,6 +193,7 @@ def submit_job_from_latest_template(
         job_id=job_id,
         ssh_command="",
         job_url=f"{client.settings.server.rstrip('/')}/app/jobs/properties/{job_id}",
+        product_id=build_cpu_product_id(size),
     )
 
 
@@ -215,6 +224,20 @@ def extract_ssh_command(job: Mapping[str, Any]) -> str:
             if match:
                 return match.group(0)
     return ""
+
+
+def extract_job_product_id(job: Mapping[str, Any]) -> str | None:
+    specification = job.get("specification")
+    if not isinstance(specification, Mapping):
+        return None
+    product = specification.get("product")
+    if not isinstance(product, Mapping):
+        return None
+    product_id = product.get("id")
+    if not isinstance(product_id, str):
+        return None
+    value = product_id.strip()
+    return value or None
 
 
 def wait_for_running_job(

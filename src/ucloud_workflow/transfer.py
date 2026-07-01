@@ -12,12 +12,15 @@ from pathlib import Path
 from .client import UCloudClient
 from .jobs import submit_job_from_latest_template, update_ssh_config, wait_for_running_job
 from .settings import Settings
+from .utilization import analyze_job_report, render_utilization_analysis
 
 
 DEFAULT_REMOTE_WORK_DIR = "/work/moody_agent"
+DEFAULT_REMOTE_JOB_REPORT_PATH = "/work/job-report.csv"
 DEFAULT_POLL_SECONDS = 2
 DEFAULT_DUMMY_INPUT_NAME = "dummy_input.txt"
 DEFAULT_DUMMY_OUTPUT_NAME = "dummy_output.txt"
+DEFAULT_JOB_REPORT_NAME = "job-report.csv"
 
 
 @dataclass(frozen=True, slots=True)
@@ -25,6 +28,7 @@ class SSHTransferDemoResult:
     job_id: str
     run_id: str
     local_output_path: Path
+    job_report_path: Path | None
     remote_dir: str
 
 
@@ -46,6 +50,7 @@ class RemotePythonJobResult:
     remote_dir: str
     local_output_dir: Path
     downloaded_paths: tuple[Path, ...]
+    job_report_path: Path | None
 
 
 def timestamp_slug() -> str:
@@ -103,6 +108,36 @@ def remote_file_exists(alias: str, remote_path: str) -> bool:
     return remote_path_exists(alias, remote_path)
 
 
+def download_optional_remote_file(alias: str, remote_path: str, local_path: Path) -> Path | None:
+    if not remote_path_exists(alias, remote_path):
+        return None
+    scp_download(alias, remote_path, local_path)
+    return local_path
+
+
+def download_optional_job_report(alias: str, local_output_dir: Path) -> Path | None:
+    local_report_path = local_output_dir / DEFAULT_JOB_REPORT_NAME
+    return download_optional_remote_file(alias, DEFAULT_REMOTE_JOB_REPORT_PATH, local_report_path)
+
+
+def print_job_report_analysis(
+    report_path: Path,
+    *,
+    current_machine_product: str | None = None,
+) -> None:
+    try:
+        analysis = analyze_job_report(
+            report_path,
+            current_machine_product=current_machine_product,
+        )
+        print(render_utilization_analysis(analysis), flush=True)
+    except Exception as exc:
+        print(
+            f"Warning: could not analyze utilization report {report_path}: {exc}",
+            file=sys.stderr,
+        )
+
+
 def remote_dir_list(alias: str, remote_dir: str) -> str:
     completed = run_command(["ssh", alias, f"ls -la {remote_quote(remote_dir)}"])
     return completed.stdout.strip()
@@ -158,6 +193,7 @@ def run_remote_python_job(
     spec: RemotePythonJobSpec,
     *,
     name: str | None = None,
+    template_job_id: str | None = None,
 ) -> RemotePythonJobResult:
     if not spec.script_path.is_file():
         raise FileNotFoundError(f"Missing Python script: {spec.script_path}")
@@ -166,8 +202,10 @@ def run_remote_python_job(
     local_output_dir = spec.local_output_root / f"{run_id}"
     local_output_dir.mkdir(parents=True, exist_ok=True)
     remote_dir = ""
+    job_report_path: Path | None = None
 
     upload_paths = [spec.script_path, *spec.upload_paths]
+    selected_template_job_id = settings.template_job_id if template_job_id is None else template_job_id
 
     with UCloudClient(settings) as client:
         launched = submit_job_from_latest_template(
@@ -176,8 +214,8 @@ def run_remote_python_job(
             hours=settings.default_hours,
             name=name or f"{spec.job_name_prefix}-{run_id}",
             ssh_enabled=True,
-            mounts=settings.mount_paths,
-            template_job_id=settings.template_job_id,
+            mounts=[],
+            template_job_id=selected_template_job_id,
         )
 
         downloaded_paths: list[Path] = []
@@ -189,6 +227,7 @@ def run_remote_python_job(
                 alias=settings.ssh_alias,
                 config_path=settings.ssh_config_path,
             )
+            current_machine_product = getattr(launched, "product_id", None)
 
             remote_dir = remote_job_directory(settings, run_id, launched.job_id)
             remote_mkdir(settings.ssh_alias, remote_dir)
@@ -214,6 +253,14 @@ def run_remote_python_job(
                 scp_download(settings.ssh_alias, remote_output_path, local_output_path)
                 downloaded_paths.append(local_output_path)
                 print(f"Downloaded {relative_output_path} -> {local_output_path}", flush=True)
+
+            job_report_path = download_optional_job_report(settings.ssh_alias, local_output_dir)
+            if job_report_path is not None:
+                print(f"Downloaded job report -> {job_report_path}", flush=True)
+                print_job_report_analysis(
+                    job_report_path,
+                    current_machine_product=current_machine_product,
+                )
         finally:
             try:
                 client.terminate_job(launched.job_id)
@@ -230,6 +277,7 @@ def run_remote_python_job(
         remote_dir=remote_dir,
         local_output_dir=local_output_dir,
         downloaded_paths=tuple(downloaded_paths),
+        job_report_path=job_report_path,
     )
 
 
@@ -276,6 +324,7 @@ def run_ssh_transfer_demo(
     local_output_path: Path | None = None,
     delay_seconds: int = 0,
     poll_seconds: int = DEFAULT_POLL_SECONDS,
+    template_job_id: str | None = None,
 ) -> SSHTransferDemoResult:
     examples_dir = examples_dir or default_examples_dir()
     worker_script_path = examples_dir / "worker.py"
@@ -290,6 +339,8 @@ def run_ssh_transfer_demo(
     run_id = timestamp_slug()
     local_output_path.parent.mkdir(parents=True, exist_ok=True)
     remote_dir = ""
+    job_report_path: Path | None = None
+    selected_template_job_id = settings.template_job_id if template_job_id is None else template_job_id
 
     with UCloudClient(settings) as client:
         launched = submit_job_from_latest_template(
@@ -298,8 +349,8 @@ def run_ssh_transfer_demo(
             hours=settings.default_hours,
             name=f"ssh-transfer-demo-{run_id}",
             ssh_enabled=True,
-            mounts=settings.mount_paths,
-            template_job_id=settings.template_job_id,
+            mounts=[],
+            template_job_id=selected_template_job_id,
         )
 
         try:
@@ -309,6 +360,7 @@ def run_ssh_transfer_demo(
                 alias=settings.ssh_alias,
                 config_path=settings.ssh_config_path,
             )
+            current_machine_product = getattr(launched, "product_id", None)
 
             remote_dir = remote_job_directory(settings, run_id, launched.job_id)
             remote_mkdir(settings.ssh_alias, remote_dir)
@@ -334,6 +386,13 @@ def run_ssh_transfer_demo(
                 local_output_path,
                 poll_seconds=poll_seconds,
             )
+            job_report_path = download_optional_job_report(settings.ssh_alias, examples_dir)
+            if job_report_path is not None:
+                print(f"Downloaded job report -> {job_report_path}", flush=True)
+                print_job_report_analysis(
+                    job_report_path,
+                    current_machine_product=current_machine_product,
+                )
         finally:
             try:
                 client.terminate_job(launched.job_id)
@@ -348,5 +407,6 @@ def run_ssh_transfer_demo(
         job_id=launched.job_id,
         run_id=run_id,
         local_output_path=local_output_path,
+        job_report_path=job_report_path,
         remote_dir=remote_dir,
     )

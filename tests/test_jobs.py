@@ -1,4 +1,5 @@
 from ucloud_workflow.jobs import (
+    build_cpu_product_id,
     build_job_specification,
     build_file_resource,
     clean_specification,
@@ -27,7 +28,7 @@ def test_build_job_specification_rewrites_product_and_time_allocation() -> None:
 
     spec = build_job_specification(template, size="128-vcpu", hours=3, name="demo")
 
-    assert spec["product"]["id"] == "cpu-amd-zen5-128-vcpu"
+    assert spec["product"]["id"] == build_cpu_product_id("128-vcpu")
     assert spec["timeAllocation"]["hours"] == 3
     assert spec["name"] == "demo"
 
@@ -48,6 +49,14 @@ def test_build_job_specification_adds_mount_resources() -> None:
         {"path": "/123/shared-input", "readOnly": False, "type": "file"},
         {"path": "/123/reference-data", "readOnly": True, "type": "file"},
     ]
+
+
+def test_build_job_specification_preserves_template_resources_without_mount_override() -> None:
+    template = {"parameters": [], "resources": [{"type": "file", "path": "/8983017/moody_agent", "readOnly": False}]}
+
+    spec = build_job_specification(template, size="128-vcpu", hours=3)
+
+    assert spec["resources"] == [{"type": "file", "path": "/8983017/moody_agent", "readOnly": False}]
 
 
 def test_build_file_resource_rejects_non_ucloud_paths() -> None:
@@ -114,3 +123,4 @@ def test_submit_job_from_latest_template_uses_template_job_id() -> None:
 
     assert result.job_id == "job-new123"
     assert client.specification["sshEnabled"] is True
+    assert result.product_id == build_cpu_product_id("128-vcpu")
