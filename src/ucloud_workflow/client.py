@@ -104,3 +104,26 @@ class UCloudClient:
             json={"items": [{"id": job_id}]},
         ).json()
 
+    def browse_api_tokens(
+        self,
+        *,
+        items_per_page: int = 100,
+        filter_hidden: bool = False,
+    ) -> dict[str, Any]:
+        """Return non-secret API-token metadata, including ``specification.expiresAt``."""
+        return self.request(
+            "GET",
+            "/api/tokens/browse",
+            params={
+                "itemsPerPage": items_per_page,
+                "filterHidden": str(filter_hidden).lower(),
+            },
+        ).json()
+
+    def create_api_token(self, specification: Mapping[str, Any]) -> dict[str, Any]:
+        """Create one API token. The returned secret is available only in this response."""
+        return self.request("POST", "/api/tokens", json=dict(specification)).json()
+
+    def retrieve_api_token_options(self) -> dict[str, Any]:
+        """Return token providers and permissions available to the authenticated user."""
+        return self.request("GET", "/api/tokens/retrieveOptions").json()

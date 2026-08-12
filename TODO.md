@@ -3,29 +3,32 @@
 ## Verified
 
 - [x] Verify `UCLOUD_TEMPLATE_JOB_ID` is loaded from `.env`
-- [x] Verify `UCLOUD_MOUNT_PATH` is loaded from `.env`
 
-## Workflow
+## CLI workflows
 
 - [ ] Add a smoke test for `examples/ssh_transfer_job.py` against a real UCloud job
 - [ ] Replace the dummy SSH transfer demo with a real extraction workflow
-- [ ] Add configurable output naming for the transfer demo
+- [x] Add configurable output naming for the transfer demo
 - [x] Add an overview tool for all UCloud machine types
-- [x] Verify mount / drive attachment against a real UCloud job
-  - Verified good path form: `UCLOUD_MOUNT_PATH="/8983017/moody_agent/"`.
-  - The human-readable path form `UCLOUD_MOUNT_PATH="/agent (8983017)/moody_agent/"` failed with HTTP 400 `Unknown file or permission denied`.
-- [x] Park direct `.env` mount injection for workflow runners
-  - Standard workflows should inherit drives and app/job settings from `UCLOUD_TEMPLATE_JOB_ID` or profile-specific template jobs.
+- [x] Remove unsupported `UCLOUD_MOUNT_PATH` configuration
+- [ ] If required, validate explicit `--mount` / `--read-only-mount` flags against a real UCloud job
+  - Standard workflows inherit drives and app/job settings from `UCLOUD_TEMPLATE_JOB_ID` or profile-specific template jobs.
 
 ## Infrastructure
 
 - [x] Add a reusable catalog of `UCLOUD_TEMPLATE_JOB_ID` values by job family
 - [x] Add a standard job profile registry for common workload types
 - [x] Add a machine capability / availability overview tool
-- [ ] Fill `TEMPLATE_JOB_CATALOG.md` with verified template jobs for CPU Python, VS Code, RStudio, and GPU workloads
-- [ ] Add a shared artifact manifest and provenance schema
+- [x] Add read-only API-token expiry inspection from `/api/tokens/browse`
+- [x] Add controlled API-token creation with explicit `--yes` confirmation
+- [x] Test controlled replacement-token creation and validation against the live UCloud API
+- [ ] Add an opt-in, safely recoverable token-rotation workflow
+  - Validate the replacement from a fresh process before changing `.env` or revoking the old token.
+  - Keep manual UCloud web-UI revocation until an explicit revoke flow is designed and tested.
+- [ ] Fill `docs/operations/template-job-catalog.md` with verified template jobs for CPU Python, VS Code, RStudio, and GPU workloads
+- [x] Add a shared artifact manifest and provenance schema
 
-## Delivery
+## Local delivery bundles
 
 - [ ] Add a sample delivery bundle generated from a real output directory
-- [ ] Document the full point 5 -> point 6 flow end to end
+- [x] Document the end-to-end run-and-deliver CLI procedure

@@ -20,7 +20,6 @@ def test_start_cpu_job_terminates_job_and_uses_ssh_alias(monkeypatch) -> None:
         server="https://cloud.sdu.dk",
         token="token",
         project="Moody's Datahub",
-        mount_path="/8983017/moody_agent/",
         ssh_alias="ucloud",
         work_folder="/work/moody_agent",
     )

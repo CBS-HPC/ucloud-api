@@ -1,10 +1,10 @@
-# API Reference
+# UCloud Workflow CLI reference
 
-This document describes the code-level API of the Python workflow toolkit and the current UCloud HTTP endpoints it uses.
+The `ucloud` command-line interface is the supported way to operate this project. This document describes its configuration and commands, then lists the Python modules and current UCloud HTTP endpoints used by the CLI. It does not describe an AI agent, a hosted service, or an unattended scheduler.
 
 ## Environment variables
 
-`Settings.from_env()` loads `.env` automatically from the project root.
+`Settings.from_env()` automatically loads `.env` from the current working directory. Run the CLI from the repository root when using the repository's `.env` file.
 
 Required:
 
@@ -16,7 +16,6 @@ Optional:
 - `UCLOUD_SERVER` - defaults to `https://cloud.sdu.dk`
 - `UCLOUD_TEMPLATE_JOB_ID` - use a specific job as the reusable template; preferred source for mounted drives and application/job settings
 - `UCLOUD_TEMPLATE_JOB_ID_<PROFILE>` - profile-specific template override, for example `UCLOUD_TEMPLATE_JOB_ID_CPU_PYTHON_BATCH`
-- `UCLOUD_MOUNT_PATH` - legacy/advanced direct mount value; current workflow runners prefer template-job resources and do not inject this automatically
 - `UCLOUD_SSH_ALIAS` - SSH host alias written to `~/.ssh/config`
 - `UCLOUD_WORK_FOLDER` - remote working root, defaults to `/work/moody_agent`
 - `UCLOUD_DEFAULT_SIZE` - default CPU size, for example `128-vcpu`
@@ -24,11 +23,15 @@ Optional:
 - `UCLOUD_OUTPUT_DIR` - default local output directory for packaging
 - `UCLOUD_DELIVERY_ROOT` - default local delivery archive root
 
-## Python package API
+Token-expiry inspection uses the same authenticated client. The configured token must have access to the token-management API; a `uc...` token string does not reveal its own expiry locally.
+
+## Python library reference
+
+The Python modules below implement the CLI and can also be imported by advanced integrations. For routine UCloud operations, prefer the corresponding `ucloud` command. Use `uv run ucloud --help` for the installed command and option list.
 
 ### `ucloud version`
 
-Print the installed package version.
+Print the installed CLI package version.
 
 ### `ucloud_workflow.settings`
 
@@ -42,7 +45,6 @@ Important fields:
 - `token`
 - `project`
 - `template_job_id`
-- `mount_path`
 - `ssh_alias`
 - `work_folder`
 - `default_size`
@@ -54,11 +56,6 @@ Important fields:
 #### `Settings.from_env(...) -> Settings`
 
 Loads settings from keyword arguments, environment variables, and `.env`.
-
-#### `Settings.mount_paths -> list[str]`
-
-Returns a one-item list when `UCLOUD_MOUNT_PATH` is set, otherwise an empty list.
-This remains available for explicit low-level mount handling, but the main workflow runners rely on template-job resources.
 
 #### `Settings.template_job_id_for(profile_name=None) -> str | None`
 
@@ -151,7 +148,7 @@ The MIG ladder currently includes:
 
 #### `UCloudClient(settings, timeout=30.0)`
 
-Thin HTTP client for the UCloud endpoints used by the workflow.
+Thin HTTP client for the UCloud endpoints used by the CLI.
 
 Uses these headers on every request:
 
@@ -167,10 +164,54 @@ Uses these headers on every request:
 - `retrieve_job(job_id, include_updates=True)`
 - `submit_job(specification)`
 - `terminate_job(job_id)`
+- `browse_api_tokens(items_per_page=100, filter_hidden=False)` - calls `GET /api/tokens/browse` and returns metadata only
+- `retrieve_api_token_options()` - calls `GET /api/tokens/retrieveOptions` for available providers and permission definitions
+- `create_api_token(specification)` - calls `POST /api/tokens`; the response contains a token secret only once at `status.token`
 
 #### `UCloudAPIError`
 
 Raised when the UCloud API returns a non-2xx response.
+
+### `ucloud_workflow.tokens`
+
+#### `summarize_api_tokens(response, expiring_within_days=30)`
+
+Converts the `GET /api/tokens/browse` response into non-secret token summaries. It supports UCloud epoch-millisecond `specification.expiresAt` values and marks each token as `active`, `expiring-soon`, `expired`, or `unknown`.
+
+#### CLI
+
+`ucloud tokens status --within-days 30` prints the title, token id, expiry timestamp, remaining days, state, and requested permissions. It does not print or persist token secrets.
+
+`ucloud tokens options` prints the available token providers and permissions for the authenticated user. If UCloud returns an error, use the web UI rather than guessing permission names.
+
+`ucloud tokens create` requires `--title` and exactly one of timezone-aware `--expires-at` or `--valid-for MONTHS`. `--permission NAME:ACTION` is optional and repeatable. `--valid-for` uses calendar months. It only previews the non-secret payload unless the user supplies `--yes`. With `--yes`, it sends `POST /api/tokens`, prints the one-time secret returned by UCloud, but does not write `.env` or revoke any token. A network failure is treated as an unknown outcome and is never retried automatically because the one-time secret could be lost.
+
+#### Token helper functions
+
+- `build_api_token_specification(...)` builds the non-secret `POST /api/tokens` payload.
+- `parse_expiry_timestamp(...)` converts a timezone-aware ISO 8601 timestamp to UCloud epoch milliseconds.
+- `expiry_timestamp_after_months(...)` calculates a calendar-month expiry in UCloud epoch milliseconds.
+- `resolve_expiry_timestamp(...)` enforces exactly one expiry declaration.
+
+The complete operational procedure is documented in [`Token management`](../guides/token-management.md).
+
+### `ucloud_workflow.artifacts`
+
+#### `ARTIFACT_MANIFEST_SCHEMA`
+
+The shared manifest schema identifier: `ucloud.artifact-manifest.v1`.
+
+#### `ArtifactRecord`
+
+One delivered artifact with `path`, `role`, `size_bytes`, `sha256`, and optional `content_type`.
+
+#### `build_artifact_manifest(...)`
+
+Builds the manifest used by delivery archives. `manifest.json` retains a legacy `files` list for simple consumers and adds the full `artifacts` and `provenance` records.
+
+### `ucloud delivery package`
+
+In addition to input directories and `--job-id`, the delivery command accepts `--run-id`, `--template-job-id`, `--machine-product`, repeatable `--workflow-note`, `--variables-json` (a JSON array), and `--metadata-json` (a JSON object). These values are stored in `manifest.json`; API-token secrets must never be included.
 
 ### `ucloud_workflow.jobs`
 
@@ -201,7 +242,7 @@ Clones a template spec and rewrites:
 - SSH enablement
 - optional job name
 
-Existing template `resources` are preserved. Explicit file/folder mounts are merged only when `mounts` or `read_only_mounts` are passed.
+Existing template `resources` are preserved. Explicit file/folder mounts are merged only when `mounts` or `read_only_mounts` are passed; this low-level path remains unverified against a real job.
 
 #### `submit_job_from_latest_template(...) -> JobLaunchResult`
 
@@ -251,7 +292,7 @@ Fields:
 
 #### `run_remote_python_job(settings, spec, name=None, template_job_id=None) -> RemotePythonJobResult`
 
-Generic workflow used for the real use case.
+Python implementation behind the `ucloud workflow python-job` command.
 
 Behavior:
 
@@ -301,11 +342,11 @@ It keeps the following files as its demo payload:
 
 #### `ExtractionScriptSpec`
 
-Metadata container for generated extraction scripts.
+Metadata container for a local starter extraction script.
 
 #### `write_extraction_script(path, spec) -> Path`
 
-Creates a starter extraction script on disk.
+Creates a local starter extraction script on disk. It does not generate code through an AI service.
 
 ### `ucloud_workflow.delivery`
 
@@ -318,7 +359,7 @@ The delivery packager creates a standardized zip archive containing:
 
 The CLI entry point is `ucloud delivery package`.
 
-## CLI API
+## CLI command reference
 
 Run the commands with `uv run`.
 
@@ -331,6 +372,9 @@ Run the commands with `uv run`.
 - `ucloud catalog profiles`
 - `ucloud catalog templates`
 - `ucloud catalog machines`
+- `ucloud tokens status`
+- `ucloud tokens options`
+- `ucloud tokens create`
 - `ucloud delivery package`
 - `ucloud workflow scaffold-script`
 - `ucloud workflow run`
@@ -342,7 +386,7 @@ All job-launching commands accept `--profile` to pick a named job family from th
 
 ### `ucloud workflow ssh-transfer`
 
-Demo workflow kept as a smoke test.
+Demo command kept as a smoke test.
 
 Inputs from `.env`:
 
@@ -361,7 +405,7 @@ Behavior:
 
 ### `ucloud workflow python-job`
 
-Generic remote Python runner.
+Remote Python runner.
 
 Required:
 
@@ -422,15 +466,18 @@ Standalone script wrapper around the same analyzer.
 
 Optional `--current-machine` prints a concrete next-machine suggestion.
 
-## Current UCloud HTTP endpoints
+## UCloud HTTP endpoints used by the CLI
 
-The project currently uses these public endpoints only:
+The CLI currently uses these endpoints:
 
 - `GET /api/accounting/v2/browseWallets`
 - `GET /api/jobs/browse`
 - `GET /api/jobs/retrieve`
 - `POST /api/jobs`
 - `POST /api/jobs/terminate`
+- `GET /api/tokens/browse`
+- `GET /api/tokens/retrieveOptions`
+- `POST /api/tokens`
 
 Required request headers:
 
@@ -439,5 +486,5 @@ Required request headers:
 
 ## Notes
 
-- `examples/ssh_transfer_job.py` stays in the repository as the smoke-test/demo workflow.
-- The generic runner is the path to use for the real “upload script, install package, run, download outputs” flow.
+- `examples/ssh_transfer_job.py` stays in the repository as the smoke-test/demo command.
+- `ucloud workflow python-job` is the supported command for "upload script, install package, run, download outputs".

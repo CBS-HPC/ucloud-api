@@ -3,6 +3,7 @@ from __future__ import annotations
 from pathlib import Path
 import json
 
+import httpx
 import rich.console
 import rich.table
 import typer
@@ -25,6 +26,7 @@ from .jobs import (
 )
 from .scripts import ExtractionScriptSpec, write_extraction_script
 from .settings import Settings, SettingsError
+from .tokens import build_api_token_specification, summarize_api_tokens
 from .transfer import (
     RemotePythonJobSpec,
     build_pip_install_command,
@@ -33,16 +35,18 @@ from .transfer import (
 )
 from .utilization import analyze_job_report, render_utilization_analysis
 
-app = typer.Typer(add_completion=False, help="UCloud workflow toolkit")
+app = typer.Typer(add_completion=False, help="UCloud job workflow command-line tool")
 jobs_app = typer.Typer(help="Job lifecycle commands")
 delivery_app = typer.Typer(help="Data delivery packaging")
-workflow_app = typer.Typer(help="End-to-end helpers for points 5 and 6")
+workflow_app = typer.Typer(help="Run UCloud Python jobs and collect outputs")
 catalog_app = typer.Typer(help="Catalog of standard job types and machine types")
+tokens_app = typer.Typer(help="Inspect UCloud API-token metadata without exposing token secrets")
 
 app.add_typer(jobs_app, name="jobs")
 app.add_typer(delivery_app, name="delivery")
 app.add_typer(workflow_app, name="workflow")
 app.add_typer(catalog_app, name="catalog")
+app.add_typer(tokens_app, name="tokens")
 
 console = rich.console.Console()
 
@@ -76,6 +80,16 @@ def _resolve_template_job_id(settings: Settings, profile: str | None) -> str | N
 
 def _join_notes(notes: tuple[str, ...]) -> str:
     return "; ".join(notes) if notes else "-"
+
+
+def _load_json_file(path: Path, *, expected_type: type, description: str):
+    try:
+        value = json.loads(path.read_text(encoding="utf-8"))
+    except json.JSONDecodeError as exc:
+        raise typer.BadParameter(f"{description} must contain valid JSON: {exc}") from exc
+    if not isinstance(value, expected_type):
+        raise typer.BadParameter(f"{description} must contain a JSON {expected_type.__name__}")
+    return value
 
 
 @app.command("version")
@@ -120,7 +134,7 @@ def submit_job(
     token: str | None = typer.Option(None, help="Bearer token"),
     project: str | None = typer.Option(None, help="Project header"),
 ) -> None:
-    """Submit a job by cloning the latest template."""
+    """Submit a job using the configured template."""
     settings = _load_settings(server=server, token=token, project=project)
     template_job_id = _resolve_template_job_id(settings, profile)
     with UCloudClient(settings) as client:
@@ -185,14 +199,46 @@ def package_delivery(
     docs_dir: Path | None = typer.Option(None, file_okay=False, dir_okay=True, help="Optional documentation directory"),
     scripts_dir: Path | None = typer.Option(None, file_okay=False, dir_okay=True, help="Optional scripts directory"),
     job_id: str | None = typer.Option(None, help="Optional UCloud job id"),
+    run_id: str | None = typer.Option(None, help="Optional local workflow run id"),
+    template_job_id: str | None = typer.Option(None, help="Optional UCloud template job id"),
+    machine_product: str | None = typer.Option(None, help="Optional UCloud machine product id"),
+    variables_json: Path | None = typer.Option(
+        None,
+        exists=True,
+        dir_okay=False,
+        help="Optional JSON array describing delivered variables",
+    ),
+    metadata_json: Path | None = typer.Option(
+        None,
+        exists=True,
+        dir_okay=False,
+        help="Optional JSON object with workflow metadata",
+    ),
+    workflow_note: list[str] = typer.Option([], "--workflow-note", help="Workflow provenance note (repeatable)"),
 ) -> None:
     """Create a standardized delivery zip."""
+    variables = () if variables_json is None else _load_json_file(
+        variables_json,
+        expected_type=list,
+        description="--variables-json",
+    )
+    metadata = {} if metadata_json is None else _load_json_file(
+        metadata_json,
+        expected_type=dict,
+        description="--metadata-json",
+    )
     bundle = DeliveryBundleSpec(
         data_dir=data_dir,
         docs_dir=docs_dir,
         scripts_dir=scripts_dir,
         output_path=output,
         job_id=job_id,
+        run_id=run_id,
+        template_job_id=template_job_id,
+        machine_product=machine_product,
+        variables=variables,
+        workflow_notes=tuple(workflow_note),
+        metadata=metadata,
     )
     result = create_delivery_bundle(bundle)
     console.print(f"Created delivery bundle: {result}")
@@ -230,7 +276,7 @@ def run_workflow(
     work_folder: str | None = typer.Option(None, help="Remote folder to open"),
     open_vscode: bool = typer.Option(False, help="Try to open VS Code after config is written"),
 ) -> None:
-    """Submit the latest template job and prepare SSH access."""
+    """Submit a configured template job and prepare SSH access."""
     settings = _load_settings(
         server=server,
         token=token,
@@ -264,6 +310,11 @@ def run_workflow(
 def ssh_transfer(
     delay_seconds: float = typer.Option(3.0, "--delay", help="Delay before the dummy output is written"),
     poll_seconds: int = typer.Option(2, "--poll", help="Polling interval in seconds"),
+    output: Path | None = typer.Option(
+        None,
+        "--output",
+        help="Local destination for dummy_output.txt (defaults to examples/dummy_output.txt)",
+    ),
     profile: str | None = typer.Option(None, help="Standard job profile name for the transfer demo"),
     server: str | None = typer.Option(None, help="UCloud server URL"),
     token: str | None = typer.Option(None, help="Bearer token"),
@@ -276,11 +327,136 @@ def ssh_transfer(
         settings,
         delay_seconds=delay_seconds,
         poll_seconds=poll_seconds,
+        local_output_path=output,
         template_job_id=template_job_id,
     )
     console.print(f"Job submitted: {result.job_id}")
     console.print(f"Local output file: {result.local_output_path}")
     console.print(f"Remote job directory: {result.remote_dir}")
+
+
+@tokens_app.command("status")
+def token_status(
+    expiring_within_days: int = typer.Option(
+        30,
+        "--within-days",
+        min=0,
+        help="Flag active tokens that expire within this many days",
+    ),
+    server: str | None = typer.Option(None, help="UCloud server URL"),
+    token: str | None = typer.Option(None, help="Bearer token"),
+    project: str | None = typer.Option(None, help="Project header"),
+) -> None:
+    """Show token expiry metadata; the token secret is never printed or stored."""
+    settings = _load_settings(server=server, token=token, project=project)
+    with UCloudClient(settings) as client:
+        response = client.browse_api_tokens()
+    summaries = summarize_api_tokens(
+        response,
+        expiring_within_days=expiring_within_days,
+    )
+
+    table = rich.table.Table(title="UCloud API token expiry")
+    table.add_column("Title", style="cyan")
+    table.add_column("Token ID", style="white")
+    table.add_column("Expires (UTC)", style="white")
+    table.add_column("Days left", style="yellow")
+    table.add_column("State", style="magenta")
+    table.add_column("Permissions", style="white")
+    for item in summaries:
+        expires_at = "-" if item.expires_at is None else item.expires_at.isoformat()
+        days_left = "-" if item.days_remaining is None else f"{item.days_remaining:.1f}"
+        table.add_row(
+            item.title,
+            item.token_id,
+            expires_at,
+            days_left,
+            item.expiry_state,
+            ", ".join(item.permissions) or "-",
+        )
+    console.print(table)
+
+
+@tokens_app.command("options")
+def token_options(
+    server: str | None = typer.Option(None, help="UCloud server URL"),
+    token: str | None = typer.Option(None, help="Bearer token"),
+    project: str | None = typer.Option(None, help="Project header"),
+) -> None:
+    """Show the available providers and permissions for API-token creation."""
+    settings = _load_settings(server=server, token=token, project=project)
+    with UCloudClient(settings) as client:
+        response = client.retrieve_api_token_options()
+    console.print_json(json.dumps(response, indent=2))
+
+
+@tokens_app.command("create")
+def token_create(
+    title: str = typer.Option(..., help="Human-readable token title"),
+    expires_at: str | None = typer.Option(
+        None,
+        "--expires-at",
+        help="ISO 8601 expiry with timezone, for example 2026-09-11T22:00:00Z",
+    ),
+    valid_for: int | None = typer.Option(
+        None,
+        "--valid-for",
+        min=1,
+        help="Number of calendar months the token is valid for",
+    ),
+    permission: list[str] = typer.Option(
+        [],
+        "--permission",
+        help="Optional requested permission as NAME:ACTION; repeat for each permission",
+    ),
+    description: str = typer.Option("Created by ucloud-workflow", help="Token description"),
+    provider: str | None = typer.Option(None, help="Optional UCloud token provider"),
+    yes: bool = typer.Option(False, "--yes", help="Actually create the token after previewing the request"),
+    server: str | None = typer.Option(None, help="UCloud server URL"),
+    token: str | None = typer.Option(None, help="Bearer token"),
+    project: str | None = typer.Option(None, help="Project header"),
+) -> None:
+    """Preview or explicitly create an API token; the secret is shown only once."""
+    try:
+        specification = build_api_token_specification(
+            title=title,
+            description=description,
+            expires_at=expires_at,
+            valid_for_months=valid_for,
+            permissions=permission,
+            provider=provider,
+        )
+    except ValueError as exc:
+        raise typer.BadParameter(str(exc)) from exc
+
+    console.print("Token creation request:")
+    console.print_json(json.dumps(specification, indent=2))
+    if not yes:
+        console.print("Preview only. Review the request, then rerun with --yes to create the token.")
+        return
+
+    settings = _load_settings(server=server, token=token, project=project)
+    try:
+        with UCloudClient(settings) as client:
+            response = client.create_api_token(specification)
+    except httpx.RequestError as exc:
+        console.print(f"UCloud did not confirm token creation: {exc.__class__.__name__}.")
+        console.print("Do not retry automatically. Check UCloud's API-token page for a newly created token first.")
+        console.print("If UCloud created it but the response was lost, its one-time secret cannot be recovered.")
+        raise typer.Exit(code=1) from exc
+
+    status = response.get("status") if isinstance(response, dict) else None
+    secret = status.get("token") if isinstance(status, dict) else None
+    if not isinstance(secret, str) or not secret:
+        console.print("The token was created, but UCloud did not return its one-time secret.")
+        console.print("Do not revoke the current token until the replacement credential has been recovered or recreated.")
+        raise typer.Exit(code=1)
+
+    token_id = response.get("id") if isinstance(response, dict) and isinstance(response.get("id"), str) else "unknown"
+    console.print(f"Created API token: {token_id}")
+    console.print("Save this token now. It is not written to .env and cannot be retrieved again:")
+    console.print(secret, markup=False, highlight=False)
+    console.print("Validate the replacement token before revoking the current token.")
 
 
 @workflow_app.command("python-job")

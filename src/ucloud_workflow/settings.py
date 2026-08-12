@@ -54,7 +54,6 @@ class Settings:
     token: str
     project: str
     template_job_id: str | None = None
-    mount_path: str | None = None
     ssh_alias: str = "ucloud"
     work_folder: str = "/work"
     default_size: str = "128-vcpu"
@@ -71,7 +70,6 @@ class Settings:
         token: str | None = None,
         project: str | None = None,
         template_job_id: str | None = None,
-        mount_path: str | None = None,
         ssh_alias: str | None = None,
         work_folder: str | None = None,
         default_size: str | None = None,
@@ -103,7 +101,6 @@ class Settings:
             token=resolved_token,
             project=resolved_project,
             template_job_id=template_job_id if template_job_id is not None else _env_optional("UCLOUD_TEMPLATE_JOB_ID"),
-            mount_path=mount_path if mount_path is not None else _env_optional("UCLOUD_MOUNT_PATH"),
             ssh_alias=ssh_alias or os.getenv("UCLOUD_SSH_ALIAS", "ucloud"),
             work_folder=work_folder or os.getenv("UCLOUD_WORK_FOLDER", "/work/moody_agent"),
             default_size=default_size or os.getenv("UCLOUD_DEFAULT_SIZE", "128-vcpu"),
@@ -112,10 +109,6 @@ class Settings:
             delivery_root=delivery_root or _env_path("UCLOUD_DELIVERY_ROOT", "deliveries"),
             ssh_config_path=ssh_config_path or Path.home() / ".ssh" / "config",
         )
-
-    @property
-    def mount_paths(self) -> list[str]:
-        return [self.mount_path] if self.mount_path else []
 
     def template_job_id_for(self, profile_name: str | None = None) -> str | None:
         return resolve_template_job_id(profile_name, self.template_job_id)

@@ -1,24 +1,6 @@
 from ucloud_workflow.settings import Settings
 
 
-def test_settings_mount_paths_are_empty_when_mount_is_unset(tmp_path, monkeypatch) -> None:
-    monkeypatch.chdir(tmp_path)
-    monkeypatch.delenv("UCLOUD_MOUNT_PATH", raising=False)
-
-    settings = Settings.from_env(token="token", project="Moody's Datahub")
-
-    assert settings.mount_paths == []
-
-
-def test_settings_mount_paths_pick_up_optional_env_value(tmp_path, monkeypatch) -> None:
-    monkeypatch.chdir(tmp_path)
-    monkeypatch.setenv("UCLOUD_MOUNT_PATH", "/123/shared-input")
-
-    settings = Settings.from_env(token="token", project="Moody's Datahub")
-
-    assert settings.mount_paths == ["/123/shared-input"]
-
-
 def test_settings_template_job_id_picks_up_optional_env_value(tmp_path, monkeypatch) -> None:
     monkeypatch.chdir(tmp_path)
     monkeypatch.setenv("UCLOUD_TEMPLATE_JOB_ID", "job-abc123")

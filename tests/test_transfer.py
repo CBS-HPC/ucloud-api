@@ -42,7 +42,6 @@ def test_remote_job_directory_uses_unique_subdirectory() -> None:
         server="https://cloud.sdu.dk",
         token="token",
         project="Moody's Datahub",
-        mount_path="/8983017/moody_agent/",
         work_folder="/work/moody_agent",
     )
 
@@ -94,7 +93,6 @@ def test_run_remote_python_job_uploads_script_package_and_downloads_outputs(
         server="https://cloud.sdu.dk",
         token="token",
         project="Moody's Datahub",
-        mount_path="/8983017/moody_agent/",
         work_folder="/work/moody_agent",
     )
 

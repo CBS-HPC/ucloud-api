@@ -1,8 +1,8 @@
-# UCloud Template Job Catalog
+# Maintain UCloud template jobs
 
-This document tracks reusable `UCLOUD_TEMPLATE_JOB_ID` values by purpose.
+This document tracks reusable `UCLOUD_TEMPLATE_JOB_ID` values for the `ucloud` CLI. It is an operator-maintained record, not a source of automatic job selection.
 
-The point is to stop treating the template job as a single global value and instead manage **known-good template jobs** by job family.
+Use it to replace a single global template with **known-good template jobs** for each CLI job profile.
 
 Template jobs should carry the UCloud-side configuration that is hard to reproduce safely from guessed API fields:
 
@@ -49,7 +49,7 @@ Rules for adding a template job:
 
 ## Why this matters
 
-The current code can already take a single `UCLOUD_TEMPLATE_JOB_ID`, but that is too coarse for a generic platform.
+The CLI can use a single `UCLOUD_TEMPLATE_JOB_ID`, but that is too coarse when you run different kinds of jobs.
 
 A catalog gives you:
 
@@ -58,4 +58,4 @@ A catalog gives you:
 - one template for GPU inference jobs
 - one template for RStudio or similar containerized sessions
 
-That is the right abstraction boundary for a generic UCloud tool.
+The CLI reads these ids from `UCLOUD_TEMPLATE_JOB_ID` and profile-specific `UCLOUD_TEMPLATE_JOB_ID_<PROFILE>` variables; this document is the operational record of which values are known to work.
