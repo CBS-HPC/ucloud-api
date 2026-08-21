@@ -68,7 +68,13 @@ try {
     # Create and verify dummy.txt inside the UCloud work folder.
     $timestamp = (Get-Date).ToUniversalTime().ToString("yyyy-MM-ddTHH:mm:ssZ")
     $remoteCommand = "mkdir -p '$workFolder' && printf '%s\n' 'dummy api test job=$jobId utc=$timestamp' > '$workFolder/dummy.txt' && test -s '$workFolder/dummy.txt' && ls -l '$workFolder/dummy.txt' && cat '$workFolder/dummy.txt'"
-    & ssh $sshAlias $remoteCommand
+    & ssh `
+        -o BatchMode=yes `
+        -o ConnectTimeout=20 `
+        -o ServerAliveInterval=15 `
+        -o ServerAliveCountMax=2 `
+        -o NumberOfPasswordPrompts=0 `
+        $sshAlias $remoteCommand
 
     if ($LASTEXITCODE -ne 0) {
         throw "Remote dummy.txt verification failed."

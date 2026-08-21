@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 from datetime import datetime, timezone
+import shlex
 import subprocess
 import sys
 
@@ -14,6 +15,7 @@ from ucloud_workflow.jobs import (
     wait_for_running_job,
 )
 from ucloud_workflow.settings import Settings, SettingsError
+from ucloud_workflow.transfer import run_command, ssh_command, wait_for_ssh_ready
 
 REMOTE_SCRIPT = (
     "from datetime import datetime, timezone; "
@@ -25,11 +27,9 @@ REMOTE_SCRIPT = (
 
 
 def run_remote_python(ssh_alias: str) -> subprocess.CompletedProcess[str]:
-    return subprocess.run(
-        ["ssh", ssh_alias, "python3", "-c", REMOTE_SCRIPT],
-        capture_output=True,
-        text=True,
-        check=False,
+    return run_command(
+        ssh_command(ssh_alias, shlex.join(["python3", "-c", REMOTE_SCRIPT])),
+        command_name="run example Python script",
     )
 
 
@@ -56,6 +56,7 @@ def main() -> int:
                 alias=settings.ssh_alias,
                 config_path=settings.ssh_config_path,
             )
+            wait_for_ssh_ready(settings.ssh_alias)
             result = run_remote_python(settings.ssh_alias)
         finally:
             try:

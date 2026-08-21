@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.1.3 - 2026-08-21
+
+- Bound every SSH and SCP command, with process-tree cleanup after a local transport timeout.
+- Added noninteractive SSH/SCP options and retried readiness probes before remote workspace setup.
+- Added explicit stage budgets and flushed start, completion, and failure logs for remote job preparation and transfers.
+- Added typed, redacted SSH-readiness and transport-timeout errors for callers that need recovery handling.
+
 ## 0.1.2 - 2026-08-12
 
 - Added `ucloud tokens status` for read-only API-token expiry metadata.

@@ -297,17 +297,20 @@ Python implementation behind the `ucloud workflow python-job` command.
 Behavior:
 
 1. submits a fresh UCloud CPU job
-2. waits for SSH availability
-3. creates a unique remote directory under `settings.work_folder`
-4. uploads the script and any additional files/directories
-5. runs any setup commands, for example `pip install`
-6. executes the Python script over SSH
-7. downloads explicitly named output files
-8. downloads `/work/job-report.csv` if it exists
-9. analyzes the utilization report when present
-10. terminates the UCloud job in a `finally` block
+2. waits for UCloud to publish an SSH command
+3. probes `ssh <alias> true` until the endpoint accepts a noninteractive connection
+4. creates a unique remote directory under `settings.work_folder`
+5. uploads the script and any additional files/directories
+6. runs any setup commands, for example `pip install`
+7. executes the Python script over SSH
+8. downloads explicitly named output files
+9. downloads `/work/job-report.csv` if it exists
+10. analyzes the utilization report when present
+11. terminates the UCloud job in a `finally` block
 
 `template_job_id` may be passed explicitly when the caller wants a specific template job instead of the fallback stored in `Settings.template_job_id`.
+
+Every SSH/SCP process is noninteractive and time-bounded. On Windows, a timeout runs `taskkill /T /F` for the transport process tree; on POSIX, the process group is killed. `RemoteCommandTimeoutError` and `SSHReadinessError` intentionally omit remote command text, so callers can safely record pre-execution failures.
 
 #### `run_ssh_transfer_demo(settings, ..., template_job_id=None) -> SSHTransferDemoResult`
 
@@ -331,12 +334,17 @@ It keeps the following files as its demo payload:
 
 #### Other helpers
 
+- `run_command(args, timeout_seconds=..., command_name=...)`
+- `wait_for_ssh_ready(alias, attempts=6, retry_seconds=5, probe_timeout_seconds=25, timeout_seconds=None)`
+- `remote_mkdir(alias, remote_dir, timeout_seconds=180)`
 - `build_python_run_command(script_name, script_args)`
 - `build_pip_install_command(package_name, editable=False)`
 - `remote_work_root(settings)`
 - `remote_job_directory(settings, run_id, job_id)`
-- `upload_paths_to_remote(alias, remote_dir, upload_paths)`
-- `verify_remote_uploads(alias, remote_dir, filenames)`
+- `upload_paths_to_remote(alias, remote_dir, upload_paths, timeout_seconds=900)`
+- `verify_remote_uploads(alias, remote_dir, filenames, timeout_seconds=120)`
+
+`run_setup_stage(...)` prints flushed start, completion, and failure logs with the configured budget. The standard budgets are 180 seconds for remote workspace preparation, 15 minutes for upload/download stages, and 30 minutes for individual setup commands. The Python workload itself receives the requested UCloud allocation plus five minutes.
 
 ### `ucloud_workflow.scripts`
 

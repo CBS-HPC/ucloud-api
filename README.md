@@ -21,6 +21,8 @@ UCLOUD_TEMPLATE_JOB_ID=<known-good UCloud template job>
 
 The selected template job supplies mounted drives, application/container settings, SSH behavior, and baseline job configuration. Direct `--mount` flags are experimental and unverified.
 
+After UCloud reports a job as running, the CLI first probes the SSH endpoint before creating its remote workspace. SSH and SCP use noninteractive, bounded commands; a pre-execution transport timeout terminates the submitted job.
+
 ## Common commands
 
 ```powershell

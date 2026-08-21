@@ -11,7 +11,7 @@ This guide shows how to use the `ucloud` CLI to run a local Python workload on U
 
 ## 1. Run the Python workload
 
-`ucloud workflow python-job` submits a new job from the template, waits for SSH, uploads the requested local files, runs setup commands and the Python script, downloads the declared output files, and then terminates the job.
+`ucloud workflow python-job` submits a new job from the template, waits for UCloud to publish SSH, probes that endpoint before remote setup, uploads the requested local files, runs setup commands and the Python script, downloads the declared output files, and then terminates the job.
 
 ```powershell
 uv run ucloud workflow python-job `
@@ -26,7 +26,7 @@ uv run ucloud workflow python-job `
   --output output/result.csv
 ```
 
-The downloaded files are stored in a unique local run folder under `artifacts/python-job/`. When available, `/work/job-report.csv` is downloaded too and the CLI prints a machine-size recommendation. The job is terminated even if a later upload, execution, or download step fails.
+The downloaded files are stored in a unique local run folder under `artifacts/python-job/`. When available, `/work/job-report.csv` is downloaded too and the CLI prints a machine-size recommendation. SSH/SCP calls are noninteractive and time-bounded. The CLI logs the start, completion, or failure of each setup stage; a failed readiness or workspace-preparation stage terminates the job before the workload runs.
 
 ## 2. Prepare delivery documentation
 

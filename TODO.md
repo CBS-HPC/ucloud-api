@@ -6,11 +6,12 @@
 
 ## CLI workflows
 
-- [ ] Add a smoke test for `examples/ssh_transfer_job.py` against a real UCloud job
+- [ ] Live-test `examples/ssh_transfer_job.py` against a real UCloud job, including SSH-readiness retry and timeout cleanup
 - [ ] Replace the dummy SSH transfer demo with a real extraction workflow
 - [x] Add configurable output naming for the transfer demo
 - [x] Add an overview tool for all UCloud machine types
 - [x] Remove unsupported `UCLOUD_MOUNT_PATH` configuration
+- [x] Bound noninteractive SSH/SCP transport and retry endpoint readiness before remote workspace setup
 - [ ] If required, validate explicit `--mount` / `--read-only-mount` flags against a real UCloud job
   - Standard workflows inherit drives and app/job settings from `UCLOUD_TEMPLATE_JOB_ID` or profile-specific template jobs.
 
@@ -27,6 +28,7 @@
   - Keep manual UCloud web-UI revocation until an explicit revoke flow is designed and tested.
 - [ ] Fill `docs/operations/template-job-catalog.md` with verified template jobs for CPU Python, VS Code, RStudio, and GPU workloads
 - [x] Add a shared artifact manifest and provenance schema
+- [ ] Verify downstream callers map `SSHReadinessError` and `RemoteCommandTimeoutError` to redacted pre-execution recovery records
 
 ## Local delivery bundles
 

@@ -49,6 +49,7 @@ def test_start_cpu_job_terminates_job_and_uses_ssh_alias(monkeypatch) -> None:
     )
     monkeypatch.setattr(start_cpu_job, "wait_for_running_job", lambda client, job_id: ({}, "ssh user@host -p 22"))
     monkeypatch.setattr(start_cpu_job, "update_ssh_config", lambda *args, **kwargs: None)
+    monkeypatch.setattr(start_cpu_job, "wait_for_ssh_ready", lambda alias: None)
     monkeypatch.setattr(
         start_cpu_job,
         "run_remote_python",

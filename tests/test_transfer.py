@@ -141,17 +141,17 @@ def test_run_remote_python_job_uploads_script_package_and_downloads_outputs(
     monkeypatch.setattr(
         transfer,
         "scp_upload",
-        lambda alias, local_path, remote_path: uploaded_paths.append((Path(local_path).name, remote_path)),
+        lambda alias, local_path, remote_path, **_kwargs: uploaded_paths.append((Path(local_path).name, remote_path)),
     )
     monkeypatch.setattr(
         transfer,
         "run_remote_shell_command",
-        lambda alias, remote_dir, command: remote_commands.append(command),
+        lambda alias, remote_dir, command, **_kwargs: remote_commands.append(command),
     )
     monkeypatch.setattr(
         transfer,
         "scp_download",
-        lambda alias, remote_path, local_path: (
+        lambda alias, remote_path, local_path, **_kwargs: (
             local_path.parent.mkdir(parents=True, exist_ok=True),
             downloaded_paths.append(local_path),
             local_path.write_text("downloaded", encoding="utf-8"),
@@ -252,12 +252,12 @@ def test_run_ssh_transfer_demo_uploads_static_files_and_downloads_output(
     monkeypatch.setattr(
         transfer,
         "scp_upload",
-        lambda alias, local_path, remote_path: uploaded_paths.append((Path(local_path).name, remote_path)),
+        lambda alias, local_path, remote_path, **_kwargs: uploaded_paths.append((Path(local_path).name, remote_path)),
     )
     monkeypatch.setattr(
         transfer,
         "scp_download",
-        lambda alias, remote_path, local_path: (
+        lambda alias, remote_path, local_path, **_kwargs: (
             local_path.parent.mkdir(parents=True, exist_ok=True),
             downloaded_paths.append(local_path),
             local_path.write_text("downloaded", encoding="utf-8"),
@@ -267,7 +267,7 @@ def test_run_ssh_transfer_demo_uploads_static_files_and_downloads_output(
     monkeypatch.setattr(
         transfer,
         "sync_outputs_while_running",
-        lambda alias, remote_dir, local_output_path, *, poll_seconds: local_output_path.write_text(
+        lambda alias, remote_dir, local_output_path, *, poll_seconds, **_kwargs: local_output_path.write_text(
             "dummy output",
             encoding="utf-8",
         ),
@@ -335,5 +335,229 @@ def test_run_ssh_transfer_demo_terminates_job_on_failure(
 
     with pytest.raises(RuntimeError, match="boom"):
         transfer.run_ssh_transfer_demo(settings, examples_dir=examples_dir)
+
+    assert terminated_job_ids == ["job-abc123"]
+
+
+def test_run_command_times_out_and_cleans_up_the_process_tree(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    cleanup_pids: list[int] = []
+    popen_calls: list[dict[str, object]] = []
+
+    class HungProcess:
+        pid = 1234
+        returncode: int | None = None
+
+        def __init__(self) -> None:
+            self.communicate_calls: list[float | None] = []
+
+        def communicate(self, timeout: float | None = None) -> tuple[str, str]:
+            self.communicate_calls.append(timeout)
+            if len(self.communicate_calls) == 1:
+                raise subprocess.TimeoutExpired("ssh", timeout)
+            self.returncode = -9
+            return "", ""
+
+    process = HungProcess()
+
+    def fake_popen(_args: list[str], **kwargs: object) -> HungProcess:
+        popen_calls.append(kwargs)
+        return process
+
+    monkeypatch.setattr(transfer.subprocess, "Popen", fake_popen)
+    monkeypatch.setattr(
+        transfer,
+        "terminate_process_tree",
+        lambda timed_out_process: cleanup_pids.append(timed_out_process.pid),
+    )
+
+    with pytest.raises(transfer.RemoteCommandTimeoutError, match="SSH readiness probe timed out after 1"):
+        transfer.run_command(
+            ["ssh", "ucloud", "true"],
+            timeout_seconds=1,
+            command_name="SSH readiness probe",
+        )
+
+    assert cleanup_pids == [1234]
+    assert process.communicate_calls == [1, None]
+    if sys.platform == "win32":
+        assert popen_calls[0]["creationflags"] == subprocess.CREATE_NEW_PROCESS_GROUP
+    else:
+        assert popen_calls[0]["start_new_session"] is True
+
+
+def test_terminate_process_tree_uses_taskkill_on_windows(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    commands: list[list[str]] = []
+
+    class Process:
+        pid = 1234
+
+        def poll(self) -> None:
+            return None
+
+        def kill(self) -> None:
+            return None
+
+    monkeypatch.setattr(transfer.os, "name", "nt")
+    monkeypatch.setattr(
+        transfer.subprocess,
+        "run",
+        lambda args, **_kwargs: commands.append(args) or SimpleNamespace(returncode=0),
+    )
+
+    transfer.terminate_process_tree(Process())
+
+    assert commands == [["taskkill", "/PID", "1234", "/T", "/F"]]
+
+
+def test_wait_for_ssh_ready_retries_noninteractive_probe(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    probes: list[tuple[list[str], float]] = []
+    responses = [255, 255, 0]
+
+    def fake_run_command(
+        args: list[str],
+        *,
+        check: bool,
+        timeout_seconds: float,
+        command_name: str,
+    ) -> subprocess.CompletedProcess[str]:
+        probes.append((args, timeout_seconds))
+        return subprocess.CompletedProcess(args, responses.pop(0), "", "not ready")
+
+    monkeypatch.setattr(transfer, "run_command", fake_run_command)
+
+    transfer.wait_for_ssh_ready("ucloud", attempts=3, retry_seconds=0, probe_timeout_seconds=25)
+
+    assert len(probes) == 3
+    assert probes[0] == (
+        [
+            "ssh",
+            "-o",
+            "BatchMode=yes",
+            "-o",
+            "ConnectTimeout=20",
+            "-o",
+            "ServerAliveInterval=15",
+            "-o",
+            "ServerAliveCountMax=2",
+            "-o",
+            "NumberOfPasswordPrompts=0",
+            "ucloud",
+            "true",
+        ],
+        25,
+    )
+    assert "Starting SSH readiness probe 1/3" in capsys.readouterr().out
+
+
+def test_scp_commands_are_noninteractive_and_bounded(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    commands: list[tuple[list[str], float]] = []
+    local_file = tmp_path / "input.txt"
+    local_file.write_text("input", encoding="utf-8")
+
+    def fake_run_command(
+        args: list[str],
+        *,
+        check: bool = True,
+        timeout_seconds: float,
+        command_name: str,
+    ) -> subprocess.CompletedProcess[str]:
+        commands.append((args, timeout_seconds))
+        return subprocess.CompletedProcess(args, 0, "", "")
+
+    monkeypatch.setattr(transfer, "run_command", fake_run_command)
+
+    transfer.scp_upload("ucloud", local_file, "/work/input.txt", timeout_seconds=17)
+    transfer.scp_download("ucloud", "/work/output.txt", tmp_path / "output.txt", timeout_seconds=19)
+
+    assert commands == [
+        (
+            [
+                "scp",
+                "-o",
+                "BatchMode=yes",
+                "-o",
+                "ConnectTimeout=20",
+                "-o",
+                "ServerAliveInterval=15",
+                "-o",
+                "ServerAliveCountMax=2",
+                "-o",
+                "NumberOfPasswordPrompts=0",
+                str(local_file),
+                "ucloud:/work/input.txt",
+            ],
+            17,
+        ),
+        (
+            [
+                "scp",
+                "-o",
+                "BatchMode=yes",
+                "-o",
+                "ConnectTimeout=20",
+                "-o",
+                "ServerAliveInterval=15",
+                "-o",
+                "ServerAliveCountMax=2",
+                "-o",
+                "NumberOfPasswordPrompts=0",
+                "ucloud:/work/output.txt",
+                str(tmp_path / "output.txt"),
+            ],
+            19,
+        ),
+    ]
+
+
+def test_remote_python_job_terminates_when_workspace_preparation_times_out(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    script_path = tmp_path / "main.py"
+    script_path.write_text("print('hello')\n", encoding="utf-8")
+    settings = Settings(server="https://cloud.sdu.dk", token="token", project="Moody's Datahub")
+    terminated_job_ids: list[str] = []
+
+    class DummyClient:
+        def __init__(self, _settings: Settings) -> None:
+            pass
+
+        def __enter__(self) -> "DummyClient":
+            return self
+
+        def __exit__(self, *_: object) -> None:
+            return None
+
+        def terminate_job(self, job_id: str) -> None:
+            terminated_job_ids.append(job_id)
+
+    monkeypatch.setattr(transfer, "UCloudClient", lambda _settings: DummyClient(_settings))
+    monkeypatch.setattr(
+        transfer,
+        "submit_job_from_latest_template",
+        lambda _client, **_kwargs: SimpleNamespace(job_id="job-abc123"),
+    )
+    monkeypatch.setattr(transfer, "wait_for_running_job", lambda *_args: ({}, "ssh ucloud@host -p 22"))
+    monkeypatch.setattr(transfer, "update_ssh_config", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(
+        transfer,
+        "remote_mkdir",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            transfer.SSHReadinessError("ucloud", attempts=6)
+        ),
+    )
+
+    with pytest.raises(transfer.SSHReadinessError, match="not ready"):
+        transfer.run_remote_python_job(
+            settings,
+            transfer.RemotePythonJobSpec(script_path=script_path, local_output_root=tmp_path / "artifacts"),
+        )
 
     assert terminated_job_ids == ["job-abc123"]
