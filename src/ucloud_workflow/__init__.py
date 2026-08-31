@@ -28,11 +28,11 @@ else:
     try:
         __version__ = package_version("ucloud-workflow")
     except PackageNotFoundError:
-        __version__ = "0.1.4"
+        __version__ = "0.1.5"
 
 from .client import UCloudAPIError, UCloudClient
 from .settings import Settings, SettingsError
-from .transfer import RemoteCommandTimeoutError, SSHReadinessError
+from .transfer import RemoteCommandTimeoutError, SSHReadinessError, SSHTransportError
 
 __all__ = [
     "__version__",
@@ -42,4 +42,5 @@ __all__ = [
     "UCloudClient",
     "RemoteCommandTimeoutError",
     "SSHReadinessError",
+    "SSHTransportError",
 ]

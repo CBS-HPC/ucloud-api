@@ -63,6 +63,28 @@ class RemoteCommandTimeoutError(TimeoutError):
         )
 
 
+class SSHTransportError(RuntimeError):
+    """Raised when SSH or SCP exits with OpenSSH's transport-failure code."""
+
+    def __init__(
+        self,
+        *,
+        command: Sequence[str],
+        returncode: int,
+        stdout: str,
+        stderr: str,
+        operation: str,
+    ) -> None:
+        self.command = tuple(command)
+        self.returncode = returncode
+        self.stdout = stdout
+        self.stderr = stderr
+        self.operation = operation
+        super().__init__(
+            f"{operation} transport failed with exit code {returncode}."
+        )
+
+
 class SSHReadinessError(RuntimeError):
     """Raised when UCloud exposes an SSH command before its endpoint is usable."""
 
@@ -158,6 +180,11 @@ def terminate_process_tree(process: subprocess.Popen[str]) -> None:
         pass
 
 
+def _ssh_transport_operation(args: Sequence[str]) -> str | None:
+    executable = Path(args[0]).stem.lower()
+    return executable if executable in {"ssh", "scp"} else None
+
+
 def run_command(
     args: list[str],
     *,
@@ -184,6 +211,15 @@ def run_command(
         raise RemoteCommandTimeoutError(operation, timeout_seconds) from None
 
     completed = subprocess.CompletedProcess(args, process.returncode, stdout, stderr)
+    operation = _ssh_transport_operation(args)
+    if check and completed.returncode == 255 and operation is not None:
+        raise SSHTransportError(
+            command=args,
+            returncode=completed.returncode,
+            stdout=completed.stdout,
+            stderr=completed.stderr,
+            operation=operation,
+        )
     if check and completed.returncode != 0:
         raise RuntimeError(
             f"Command failed: {' '.join(args)}\nSTDOUT:\n{completed.stdout}\nSTDERR:\n{completed.stderr}"

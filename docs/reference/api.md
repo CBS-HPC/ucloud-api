@@ -327,6 +327,12 @@ Behavior:
 
 Every SSH/SCP process is noninteractive, time-bounded, and receives `-F <Settings.ssh_config_path>`. On Windows, a timeout runs `taskkill /T /F` for the transport process tree; on POSIX, the process group is killed. `RemoteCommandTimeoutError` and `SSHReadinessError` intentionally omit remote command text, so callers can safely record pre-execution failures.
 
+#### `SSHTransportError`
+
+With the default `check=True`, `run_command(...)` raises this error when the local `ssh` or `scp` process exits with code `255`. This represents an SSH transport failure after the process completed, not a local timeout. Its fields are `command`, `returncode`, `stdout`, `stderr`, and `operation` (`ssh` or `scp`). Callers should avoid logging the raw command or output unless they first redact sensitive values.
+
+Other nonzero SSH/SCP statuses remain `RuntimeError`; `check=False` always returns `CompletedProcess` for status inspection.
+
 #### `run_ssh_transfer_demo(settings, ..., template_job_id=None) -> SSHTransferDemoResult`
 
 Proof-of-concept smoke test that remains available for validation.

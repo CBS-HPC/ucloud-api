@@ -7,6 +7,7 @@ from types import SimpleNamespace
 
 import pytest
 
+from ucloud_workflow import SSHTransportError
 from ucloud_workflow.settings import Settings
 import ucloud_workflow.transfer as transfer
 from ucloud_workflow.transfer import remote_job_directory, remote_work_root
@@ -424,6 +425,63 @@ def test_run_command_times_out_and_cleans_up_the_process_tree(
         assert popen_calls[0]["creationflags"] == subprocess.CREATE_NEW_PROCESS_GROUP
     else:
         assert popen_calls[0]["start_new_session"] is True
+
+
+@pytest.mark.parametrize("executable", ["ssh", "scp"])
+def test_run_command_classifies_exit_255_as_transport_error(
+    monkeypatch: pytest.MonkeyPatch,
+    executable: str,
+) -> None:
+    class FailedProcess:
+        returncode = 255
+
+        def communicate(self, timeout: float | None = None) -> tuple[str, str]:
+            return "", "connection timed out"
+
+    monkeypatch.setattr(transfer.subprocess, "Popen", lambda *_args, **_kwargs: FailedProcess())
+
+    with pytest.raises(transfer.SSHTransportError) as error_info:
+        transfer.run_command([executable, "ucloud", "true"])
+
+    error = error_info.value
+    assert SSHTransportError is transfer.SSHTransportError
+    assert error.returncode == 255
+    assert error.operation == executable
+    assert error.command == (executable, "ucloud", "true")
+    assert error.stdout == ""
+    assert error.stderr == "connection timed out"
+
+
+def test_run_command_keeps_non_255_ssh_failures_generic(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class FailedProcess:
+        returncode = 1
+
+        def communicate(self, timeout: float | None = None) -> tuple[str, str]:
+            return "", "remote command failed"
+
+    monkeypatch.setattr(transfer.subprocess, "Popen", lambda *_args, **_kwargs: FailedProcess())
+
+    with pytest.raises(RuntimeError, match="Command failed"):
+        transfer.run_command(["ssh", "ucloud", "false"])
+
+
+def test_run_command_returns_exit_255_when_check_is_disabled(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class FailedProcess:
+        returncode = 255
+
+        def communicate(self, timeout: float | None = None) -> tuple[str, str]:
+            return "", "connection timed out"
+
+    monkeypatch.setattr(transfer.subprocess, "Popen", lambda *_args, **_kwargs: FailedProcess())
+
+    completed = transfer.run_command(["ssh", "ucloud", "true"], check=False)
+
+    assert completed.returncode == 255
+    assert completed.stderr == "connection timed out"
 
 
 def test_terminate_process_tree_uses_taskkill_on_windows(

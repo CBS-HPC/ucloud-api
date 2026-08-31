@@ -1,6 +1,10 @@
 # Changelog
 
-## 0.1.4 - Unreleased
+## 0.1.5 - 2026-08-31
+
+- Added `SSHTransportError` for completed `ssh` or `scp` processes that exit with code `255`, allowing callers to retry connection failures without parsing error text.
+
+## 0.1.4 - 2026-08-31
 
 - Made every CLI SSH and SCP operation use the configured `UCLOUD_SSH_CONFIG_PATH` file.
 - Added standard private-key discovery beside that config file and the `UCLOUD_SSH_IDENTITY_FILE` override.
