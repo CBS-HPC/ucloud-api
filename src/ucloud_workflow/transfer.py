@@ -191,12 +191,19 @@ def run_command(
     return completed
 
 
-def ssh_command(alias: str, remote_command: str) -> list[str]:
-    return ["ssh", *SSH_TRANSPORT_OPTIONS, alias, remote_command]
+def ssh_command(
+    alias: str,
+    remote_command: str,
+    *,
+    config_path: Path | None = None,
+) -> list[str]:
+    config_options = [] if config_path is None else ["-F", str(config_path)]
+    return ["ssh", *config_options, *SSH_TRANSPORT_OPTIONS, alias, remote_command]
 
 
-def scp_command(*arguments: str) -> list[str]:
-    return ["scp", *SSH_TRANSPORT_OPTIONS, *arguments]
+def scp_command(*arguments: str, config_path: Path | None = None) -> list[str]:
+    config_options = [] if config_path is None else ["-F", str(config_path)]
+    return ["scp", *config_options, *SSH_TRANSPORT_OPTIONS, *arguments]
 
 
 def _remaining_timeout_seconds(deadline: float, operation: str) -> float:
@@ -209,6 +216,7 @@ def _remaining_timeout_seconds(deadline: float, operation: str) -> float:
 def wait_for_ssh_ready(
     alias: str,
     *,
+    config_path: Path | None = None,
     attempts: int = DEFAULT_SSH_READINESS_ATTEMPTS,
     retry_seconds: float = DEFAULT_SSH_READINESS_RETRY_SECONDS,
     probe_timeout_seconds: float = DEFAULT_SSH_READINESS_PROBE_TIMEOUT_SECONDS,
@@ -242,7 +250,7 @@ def wait_for_ssh_ready(
         )
         try:
             completed = run_command(
-                ssh_command(alias, "true"),
+                ssh_command(alias, "true", config_path=config_path),
                 check=False,
                 timeout_seconds=effective_probe_timeout_seconds,
                 command_name="SSH readiness probe",
@@ -271,12 +279,17 @@ def remote_mkdir(
     alias: str,
     remote_dir: str,
     *,
+    config_path: Path | None = None,
     timeout_seconds: float = DEFAULT_REMOTE_WORKSPACE_TIMEOUT_SECONDS,
 ) -> None:
     deadline = time.monotonic() + timeout_seconds
-    wait_for_ssh_ready(alias, timeout_seconds=timeout_seconds)
+    wait_for_ssh_ready(alias, config_path=config_path, timeout_seconds=timeout_seconds)
     run_command(
-        ssh_command(alias, f"mkdir -p {remote_quote(remote_dir)}"),
+        ssh_command(
+            alias,
+            f"mkdir -p {remote_quote(remote_dir)}",
+            config_path=config_path,
+        ),
         timeout_seconds=_remaining_timeout_seconds(deadline, "prepare_remote_workspace"),
         command_name="prepare_remote_workspace",
     )
@@ -287,9 +300,10 @@ def scp_upload(
     local_path: Path,
     remote_path: str,
     *,
+    config_path: Path | None = None,
     timeout_seconds: float = DEFAULT_UPLOAD_TIMEOUT_SECONDS,
 ) -> None:
-    command = scp_command()
+    command = scp_command(config_path=config_path)
     if local_path.is_dir():
         command.append("-r")
     command.extend([str(local_path), f"{alias}:{remote_path}"])
@@ -301,11 +315,12 @@ def scp_download(
     remote_path: str,
     local_path: Path,
     *,
+    config_path: Path | None = None,
     timeout_seconds: float = DEFAULT_DOWNLOAD_TIMEOUT_SECONDS,
 ) -> None:
     local_path.parent.mkdir(parents=True, exist_ok=True)
     run_command(
-        scp_command(f"{alias}:{remote_path}", str(local_path)),
+        scp_command(f"{alias}:{remote_path}", str(local_path), config_path=config_path),
         timeout_seconds=timeout_seconds,
         command_name="download files",
     )
@@ -315,10 +330,15 @@ def remote_path_exists(
     alias: str,
     remote_path: str,
     *,
+    config_path: Path | None = None,
     timeout_seconds: float = DEFAULT_SSH_READINESS_PROBE_TIMEOUT_SECONDS,
 ) -> bool:
     completed = run_command(
-        ssh_command(alias, f"test -e {remote_quote(remote_path)}"),
+        ssh_command(
+            alias,
+            f"test -e {remote_quote(remote_path)}",
+            config_path=config_path,
+        ),
         check=False,
         timeout_seconds=timeout_seconds,
         command_name="remote path check",
@@ -330,9 +350,15 @@ def remote_file_exists(
     alias: str,
     remote_path: str,
     *,
+    config_path: Path | None = None,
     timeout_seconds: float = DEFAULT_SSH_READINESS_PROBE_TIMEOUT_SECONDS,
 ) -> bool:
-    return remote_path_exists(alias, remote_path, timeout_seconds=timeout_seconds)
+    return remote_path_exists(
+        alias,
+        remote_path,
+        config_path=config_path,
+        timeout_seconds=timeout_seconds,
+    )
 
 
 def download_optional_remote_file(
@@ -340,12 +366,14 @@ def download_optional_remote_file(
     remote_path: str,
     local_path: Path,
     *,
+    config_path: Path | None = None,
     timeout_seconds: float = DEFAULT_DOWNLOAD_TIMEOUT_SECONDS,
 ) -> Path | None:
     deadline = time.monotonic() + timeout_seconds
     if not remote_path_exists(
         alias,
         remote_path,
+        config_path=config_path,
         timeout_seconds=_remaining_timeout_seconds(deadline, "download optional file"),
     ):
         return None
@@ -353,6 +381,7 @@ def download_optional_remote_file(
         alias,
         remote_path,
         local_path,
+        config_path=config_path,
         timeout_seconds=_remaining_timeout_seconds(deadline, "download optional file"),
     )
     return local_path
@@ -362,6 +391,7 @@ def download_optional_job_report(
     alias: str,
     local_output_dir: Path,
     *,
+    config_path: Path | None = None,
     timeout_seconds: float = DEFAULT_DOWNLOAD_TIMEOUT_SECONDS,
 ) -> Path | None:
     local_report_path = local_output_dir / DEFAULT_JOB_REPORT_NAME
@@ -369,6 +399,7 @@ def download_optional_job_report(
         alias,
         DEFAULT_REMOTE_JOB_REPORT_PATH,
         local_report_path,
+        config_path=config_path,
         timeout_seconds=timeout_seconds,
     )
 
@@ -395,10 +426,11 @@ def remote_dir_list(
     alias: str,
     remote_dir: str,
     *,
+    config_path: Path | None = None,
     timeout_seconds: float = DEFAULT_UPLOAD_VERIFY_TIMEOUT_SECONDS,
 ) -> str:
     completed = run_command(
-        ssh_command(alias, f"ls -la {remote_quote(remote_dir)}"),
+        ssh_command(alias, f"ls -la {remote_quote(remote_dir)}", config_path=config_path),
         timeout_seconds=timeout_seconds,
         command_name="list remote workspace",
     )
@@ -409,11 +441,12 @@ def wait_for_remote_file(
     alias: str,
     remote_path: str,
     *,
+    config_path: Path | None = None,
     timeout_seconds: int = 600,
     poll_seconds: int = DEFAULT_POLL_SECONDS,
 ) -> None:
     start = time.monotonic()
-    while not remote_file_exists(alias, remote_path):
+    while not remote_file_exists(alias, remote_path, config_path=config_path):
         if time.monotonic() - start > timeout_seconds:
             raise TimeoutError(f"Timed out waiting for {remote_path}")
         time.sleep(poll_seconds)
@@ -435,10 +468,15 @@ def run_remote_shell_command(
     remote_dir: str,
     command: str,
     *,
+    config_path: Path | None = None,
     timeout_seconds: float = DEFAULT_REMOTE_SETUP_TIMEOUT_SECONDS,
 ) -> None:
     run_command(
-        ssh_command(alias, f"cd {remote_quote(remote_dir)} && {command}"),
+        ssh_command(
+            alias,
+            f"cd {remote_quote(remote_dir)} && {command}",
+            config_path=config_path,
+        ),
         timeout_seconds=timeout_seconds,
         command_name="remote shell command",
     )
@@ -449,6 +487,7 @@ def upload_paths_to_remote(
     remote_dir: str,
     upload_paths: Sequence[Path],
     *,
+    config_path: Path | None = None,
     timeout_seconds: float = DEFAULT_UPLOAD_TIMEOUT_SECONDS,
 ) -> None:
     deadline = time.monotonic() + timeout_seconds
@@ -459,6 +498,7 @@ def upload_paths_to_remote(
             alias,
             local_path,
             f"{remote_dir}/{local_path.name}",
+            config_path=config_path,
             timeout_seconds=_remaining_timeout_seconds(deadline, "upload local files"),
         )
 
@@ -468,6 +508,7 @@ def verify_remote_uploads(
     remote_dir: str,
     filenames: Sequence[str],
     *,
+    config_path: Path | None = None,
     timeout_seconds: float = DEFAULT_UPLOAD_VERIFY_TIMEOUT_SECONDS,
 ) -> None:
     deadline = time.monotonic() + timeout_seconds
@@ -477,6 +518,7 @@ def verify_remote_uploads(
         if not remote_path_exists(
             alias,
             f"{remote_dir}/{filename}",
+            config_path=config_path,
             timeout_seconds=_remaining_timeout_seconds(deadline, "verify uploaded files"),
         )
     ]
@@ -484,6 +526,7 @@ def verify_remote_uploads(
         listing = remote_dir_list(
             alias,
             remote_dir,
+            config_path=config_path,
             timeout_seconds=_remaining_timeout_seconds(deadline, "verify uploaded files"),
         )
         raise FileNotFoundError(
@@ -552,6 +595,7 @@ def run_remote_python_job(
                 ssh_command,
                 alias=settings.ssh_alias,
                 config_path=settings.ssh_config_path,
+                identity_files=settings.resolved_ssh_identity_files(),
             )
             current_machine_product = getattr(launched, "product_id", None)
 
@@ -562,6 +606,7 @@ def run_remote_python_job(
                 operation=lambda timeout_seconds: remote_mkdir(
                     settings.ssh_alias,
                     remote_dir,
+                    config_path=settings.ssh_config_path,
                     timeout_seconds=timeout_seconds,
                 ),
             )
@@ -573,6 +618,7 @@ def run_remote_python_job(
                     settings.ssh_alias,
                     remote_dir,
                     upload_paths,
+                    config_path=settings.ssh_config_path,
                     timeout_seconds=timeout_seconds,
                 ),
             )
@@ -583,6 +629,7 @@ def run_remote_python_job(
                     settings.ssh_alias,
                     remote_dir,
                     [path.name for path in upload_paths],
+                    config_path=settings.ssh_config_path,
                     timeout_seconds=timeout_seconds,
                 ),
             )
@@ -595,6 +642,7 @@ def run_remote_python_job(
                         settings.ssh_alias,
                         remote_dir,
                         command,
+                        config_path=settings.ssh_config_path,
                         timeout_seconds=timeout_seconds,
                     ),
                 )
@@ -607,6 +655,7 @@ def run_remote_python_job(
                     settings.ssh_alias,
                     remote_dir,
                     run_command_text,
+                    config_path=settings.ssh_config_path,
                     timeout_seconds=timeout_seconds,
                 ),
             )
@@ -621,6 +670,7 @@ def run_remote_python_job(
                         settings.ssh_alias,
                         remote_output_path,
                         local_output_path,
+                        config_path=settings.ssh_config_path,
                         timeout_seconds=timeout_seconds,
                     ),
                 )
@@ -633,6 +683,7 @@ def run_remote_python_job(
                 operation=lambda timeout_seconds: download_optional_job_report(
                     settings.ssh_alias,
                     local_output_dir,
+                    config_path=settings.ssh_config_path,
                     timeout_seconds=timeout_seconds,
                 ),
             )
@@ -667,6 +718,7 @@ def start_remote_worker(
     remote_dir: str,
     *,
     delay_seconds: int,
+    config_path: Path | None = None,
     timeout_seconds: float = DEFAULT_REMOTE_SETUP_TIMEOUT_SECONDS,
 ) -> str:
     start_command = (
@@ -675,7 +727,7 @@ def start_remote_worker(
         f"--delay {delay_seconds} > run.log 2>&1 </dev/null & echo $!"
     )
     completed = run_command(
-        ssh_command(alias, start_command),
+        ssh_command(alias, start_command, config_path=config_path),
         timeout_seconds=timeout_seconds,
         command_name="start remote worker",
     )
@@ -691,6 +743,7 @@ def sync_outputs_while_running(
     local_output_path: Path,
     *,
     poll_seconds: int,
+    config_path: Path | None = None,
     timeout_seconds: float = DEFAULT_DOWNLOAD_TIMEOUT_SECONDS,
 ) -> None:
     remote_output = f"{remote_dir}/{DEFAULT_DUMMY_OUTPUT_NAME}"
@@ -699,6 +752,7 @@ def sync_outputs_while_running(
     wait_for_remote_file(
         alias,
         remote_output,
+        config_path=config_path,
         timeout_seconds=math.ceil(_remaining_timeout_seconds(deadline, "download dummy output")),
         poll_seconds=poll_seconds,
     )
@@ -706,6 +760,7 @@ def sync_outputs_while_running(
         alias,
         remote_output,
         local_output_path,
+        config_path=config_path,
         timeout_seconds=_remaining_timeout_seconds(deadline, "download dummy output"),
     )
     print(f"Downloaded {DEFAULT_DUMMY_OUTPUT_NAME} -> {local_output_path}", flush=True)
@@ -752,6 +807,7 @@ def run_ssh_transfer_demo(
                 ssh_command,
                 alias=settings.ssh_alias,
                 config_path=settings.ssh_config_path,
+                identity_files=settings.resolved_ssh_identity_files(),
             )
             current_machine_product = getattr(launched, "product_id", None)
 
@@ -762,6 +818,7 @@ def run_ssh_transfer_demo(
                 operation=lambda timeout_seconds: remote_mkdir(
                     settings.ssh_alias,
                     remote_dir,
+                    config_path=settings.ssh_config_path,
                     timeout_seconds=timeout_seconds,
                 ),
             )
@@ -773,6 +830,7 @@ def run_ssh_transfer_demo(
                     settings.ssh_alias,
                     remote_dir,
                     [worker_script_path, dummy_input_path],
+                    config_path=settings.ssh_config_path,
                     timeout_seconds=timeout_seconds,
                 ),
             )
@@ -783,6 +841,7 @@ def run_ssh_transfer_demo(
                     settings.ssh_alias,
                     remote_dir,
                     ["worker.py", DEFAULT_DUMMY_INPUT_NAME],
+                    config_path=settings.ssh_config_path,
                     timeout_seconds=timeout_seconds,
                 ),
             )
@@ -795,6 +854,7 @@ def run_ssh_transfer_demo(
                     settings.ssh_alias,
                     remote_dir,
                     delay_seconds=delay_seconds,
+                    config_path=settings.ssh_config_path,
                     timeout_seconds=timeout_seconds,
                 ),
             )
@@ -807,6 +867,7 @@ def run_ssh_transfer_demo(
                     remote_dir,
                     local_output_path,
                     poll_seconds=poll_seconds,
+                    config_path=settings.ssh_config_path,
                     timeout_seconds=timeout_seconds,
                 ),
             )
@@ -816,6 +877,7 @@ def run_ssh_transfer_demo(
                 operation=lambda timeout_seconds: download_optional_job_report(
                     settings.ssh_alias,
                     examples_dir,
+                    config_path=settings.ssh_config_path,
                     timeout_seconds=timeout_seconds,
                 ),
             )

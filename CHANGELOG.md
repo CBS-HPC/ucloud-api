@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.1.4 - Unreleased
+
+- Made every CLI SSH and SCP operation use the configured `UCLOUD_SSH_CONFIG_PATH` file.
+- Added standard private-key discovery beside that config file and the `UCLOUD_SSH_IDENTITY_FILE` override.
+- Added managed `IdentityFile` entries without disabling an existing SSH agent.
+
 ## 0.1.3 - 2026-08-21
 
 - Bound every SSH and SCP command, with process-tree cleanup after a local transport timeout.

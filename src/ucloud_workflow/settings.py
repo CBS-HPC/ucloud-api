@@ -7,6 +7,17 @@ import os
 from .catalog import resolve_template_job_id
 
 
+SSH_IDENTITY_FILE_NAMES = (
+    "id_rsa",
+    "id_ecdsa",
+    "id_ecdsa_sk",
+    "id_ed25519",
+    "id_ed25519_sk",
+    "id_xmss",
+    "id_dsa",
+)
+
+
 class SettingsError(RuntimeError):
     """Raised when required UCloud settings are missing."""
 
@@ -32,6 +43,20 @@ def _env_optional(name: str) -> str | None:
 def _env_path(name: str, default: str | Path) -> Path:
     raw = os.getenv(name)
     return Path(raw) if raw else Path(default)
+
+
+def _env_optional_path(name: str) -> Path | None:
+    raw = _env_optional(name)
+    return Path(raw) if raw is not None else None
+
+
+def discover_ssh_identity_files(config_path: Path) -> tuple[Path, ...]:
+    """Return standard private keys located beside the selected SSH config file."""
+    return tuple(
+        candidate
+        for name in SSH_IDENTITY_FILE_NAMES
+        if (candidate := config_path.parent / name).is_file()
+    )
 
 
 def _load_dotenv(path: Path = Path(".env")) -> None:
@@ -61,6 +86,7 @@ class Settings:
     output_dir: Path = Path("dist")
     delivery_root: Path = Path("deliveries")
     ssh_config_path: Path = Path.home() / ".ssh" / "config"
+    ssh_identity_file: Path | None = None
 
     @classmethod
     def from_env(
@@ -77,6 +103,7 @@ class Settings:
         output_dir: Path | None = None,
         delivery_root: Path | None = None,
         ssh_config_path: Path | None = None,
+        ssh_identity_file: Path | None = None,
     ) -> "Settings":
         _load_dotenv()
         resolved_server = server or os.getenv("UCLOUD_SERVER", "https://cloud.sdu.dk")
@@ -107,8 +134,19 @@ class Settings:
             default_hours=default_hours if default_hours is not None else _env_int("UCLOUD_DEFAULT_HOURS", 2),
             output_dir=output_dir or _env_path("UCLOUD_OUTPUT_DIR", "dist"),
             delivery_root=delivery_root or _env_path("UCLOUD_DELIVERY_ROOT", "deliveries"),
-            ssh_config_path=ssh_config_path or Path.home() / ".ssh" / "config",
+            ssh_config_path=ssh_config_path or _env_path(
+                "UCLOUD_SSH_CONFIG_PATH", Path.home() / ".ssh" / "config"
+            ),
+            ssh_identity_file=ssh_identity_file or _env_optional_path(
+                "UCLOUD_SSH_IDENTITY_FILE"
+            ),
         )
 
     def template_job_id_for(self, profile_name: str | None = None) -> str | None:
         return resolve_template_job_id(profile_name, self.template_job_id)
+
+    def resolved_ssh_identity_files(self) -> tuple[Path, ...]:
+        """Return the configured key or standard keys beside ``ssh_config_path``."""
+        if self.ssh_identity_file is not None:
+            return (self.ssh_identity_file,)
+        return discover_ssh_identity_files(self.ssh_config_path)

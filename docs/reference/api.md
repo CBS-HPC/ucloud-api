@@ -16,12 +16,22 @@ Optional:
 - `UCLOUD_SERVER` - defaults to `https://cloud.sdu.dk`
 - `UCLOUD_TEMPLATE_JOB_ID` - use a specific job as the reusable template; preferred source for mounted drives and application/job settings
 - `UCLOUD_TEMPLATE_JOB_ID_<PROFILE>` - profile-specific template override, for example `UCLOUD_TEMPLATE_JOB_ID_CPU_PYTHON_BATCH`
-- `UCLOUD_SSH_ALIAS` - SSH host alias written to `~/.ssh/config`
+- `UCLOUD_SSH_ALIAS` - SSH host alias written to the selected SSH config file
+- `UCLOUD_SSH_CONFIG_PATH` - SSH config path used by every CLI SSH/SCP command; defaults to `~/.ssh/config`
+- `UCLOUD_SSH_IDENTITY_FILE` - optional explicit private-key path; otherwise the CLI adds existing standard private keys beside `UCLOUD_SSH_CONFIG_PATH` to its managed SSH block
 - `UCLOUD_WORK_FOLDER` - remote working root, defaults to `/work/moody_agent`
 - `UCLOUD_DEFAULT_SIZE` - default CPU size, for example `128-vcpu`
 - `UCLOUD_DEFAULT_HOURS` - default job duration in hours
 - `UCLOUD_OUTPUT_DIR` - default local output directory for packaging
 - `UCLOUD_DELIVERY_ROOT` - default local delivery archive root
+
+## SSH configuration
+
+The CLI writes its managed `Host` block to `UCLOUD_SSH_CONFIG_PATH` and passes that file to each SSH and SCP process with `-F`. If the path is not the normal OpenSSH config, include any required `ProxyJump`, host, or user settings in that file because `-F` does not merge the client's default config.
+
+The CLI writes existing standard private keys found beside the selected config into the managed block. Use `UCLOUD_SSH_IDENTITY_FILE` for a key elsewhere. The CLI never reads or prints private-key contents, and it leaves SSH-agent authentication enabled.
+
+`ucloud workflow run --open-vscode` opens a VS Code Remote-SSH URI. VS Code chooses its own SSH configuration, so configure VS Code's `remote.SSH.configFile` to the same path when `UCLOUD_SSH_CONFIG_PATH` is non-default.
 
 Token-expiry inspection uses the same authenticated client. The configured token must have access to the token-management API; a `uc...` token string does not reveal its own expiry locally.
 
@@ -52,6 +62,7 @@ Important fields:
 - `output_dir`
 - `delivery_root`
 - `ssh_config_path`
+- `ssh_identity_file`
 
 #### `Settings.from_env(...) -> Settings`
 
@@ -63,6 +74,10 @@ Resolves the template job id for a job family.
 
 - If `profile_name` is provided and a matching `UCLOUD_TEMPLATE_JOB_ID_<PROFILE>` value exists, that value is returned.
 - Otherwise it falls back to `Settings.template_job_id`, which comes from `UCLOUD_TEMPLATE_JOB_ID` unless overridden directly.
+
+#### `Settings.resolved_ssh_identity_files() -> tuple[Path, ...]`
+
+Returns the explicit `ssh_identity_file`, when configured, or private keys with standard OpenSSH names beside `ssh_config_path`. It does not set `IdentitiesOnly`, so an existing SSH agent remains available.
 
 ### `ucloud_workflow.catalog`
 
@@ -253,9 +268,9 @@ The chosen template provides existing resources such as mounted drives; callers 
 
 Polls the job until UCloud exposes a usable SSH command.
 
-#### `update_ssh_config(ssh_command, alias, config_path) -> dict`
+#### `update_ssh_config(ssh_command, alias, config_path, identity_files=()) -> dict`
 
-Writes or replaces a managed SSH config block.
+Writes or replaces a managed SSH config block, including configured private-key paths when available.
 
 #### `open_in_vscode(alias, folder) -> bool`
 
@@ -310,7 +325,7 @@ Behavior:
 
 `template_job_id` may be passed explicitly when the caller wants a specific template job instead of the fallback stored in `Settings.template_job_id`.
 
-Every SSH/SCP process is noninteractive and time-bounded. On Windows, a timeout runs `taskkill /T /F` for the transport process tree; on POSIX, the process group is killed. `RemoteCommandTimeoutError` and `SSHReadinessError` intentionally omit remote command text, so callers can safely record pre-execution failures.
+Every SSH/SCP process is noninteractive, time-bounded, and receives `-F <Settings.ssh_config_path>`. On Windows, a timeout runs `taskkill /T /F` for the transport process tree; on POSIX, the process group is killed. `RemoteCommandTimeoutError` and `SSHReadinessError` intentionally omit remote command text, so callers can safely record pre-execution failures.
 
 #### `run_ssh_transfer_demo(settings, ..., template_job_id=None) -> SSHTransferDemoResult`
 
@@ -335,14 +350,14 @@ It keeps the following files as its demo payload:
 #### Other helpers
 
 - `run_command(args, timeout_seconds=..., command_name=...)`
-- `wait_for_ssh_ready(alias, attempts=6, retry_seconds=5, probe_timeout_seconds=25, timeout_seconds=None)`
-- `remote_mkdir(alias, remote_dir, timeout_seconds=180)`
+- `wait_for_ssh_ready(alias, config_path=None, attempts=6, retry_seconds=5, probe_timeout_seconds=25, timeout_seconds=None)`
+- `remote_mkdir(alias, remote_dir, config_path=None, timeout_seconds=180)`
 - `build_python_run_command(script_name, script_args)`
 - `build_pip_install_command(package_name, editable=False)`
 - `remote_work_root(settings)`
 - `remote_job_directory(settings, run_id, job_id)`
-- `upload_paths_to_remote(alias, remote_dir, upload_paths, timeout_seconds=900)`
-- `verify_remote_uploads(alias, remote_dir, filenames, timeout_seconds=120)`
+- `upload_paths_to_remote(alias, remote_dir, upload_paths, config_path=None, timeout_seconds=900)`
+- `verify_remote_uploads(alias, remote_dir, filenames, config_path=None, timeout_seconds=120)`
 
 `run_setup_stage(...)` prints flushed start, completion, and failure logs with the configured budget. The standard budgets are 180 seconds for remote workspace preparation, 15 minutes for upload/download stages, and 30 minutes for individual setup commands. The Python workload itself receives the requested UCloud allocation plus five minutes.
 

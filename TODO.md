@@ -12,6 +12,8 @@
 - [x] Add an overview tool for all UCloud machine types
 - [x] Remove unsupported `UCLOUD_MOUNT_PATH` configuration
 - [x] Bound noninteractive SSH/SCP transport and retry endpoint readiness before remote workspace setup
+- [x] Use the configured SSH config file and discovered private key for CLI transports
+- [x] Live-test `UCLOUD_SSH_CONFIG_PATH` and `UCLOUD_SSH_IDENTITY_FILE` on a real UCloud job
 - [ ] If required, validate explicit `--mount` / `--read-only-mount` flags against a real UCloud job
   - Standard workflows inherit drives and app/job settings from `UCLOUD_TEMPLATE_JOB_ID` or profile-specific template jobs.
 

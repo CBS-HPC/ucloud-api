@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 from datetime import datetime, timezone
+from pathlib import Path
 import shlex
 import subprocess
 import sys
@@ -26,9 +27,17 @@ REMOTE_SCRIPT = (
 )
 
 
-def run_remote_python(ssh_alias: str) -> subprocess.CompletedProcess[str]:
+def run_remote_python(
+    ssh_alias: str,
+    *,
+    config_path: Path,
+) -> subprocess.CompletedProcess[str]:
     return run_command(
-        ssh_command(ssh_alias, shlex.join(["python3", "-c", REMOTE_SCRIPT])),
+        ssh_command(
+            ssh_alias,
+            shlex.join(["python3", "-c", REMOTE_SCRIPT]),
+            config_path=config_path,
+        ),
         command_name="run example Python script",
     )
 
@@ -55,9 +64,16 @@ def main() -> int:
                 ssh_command,
                 alias=settings.ssh_alias,
                 config_path=settings.ssh_config_path,
+                identity_files=settings.resolved_ssh_identity_files(),
             )
-            wait_for_ssh_ready(settings.ssh_alias)
-            result = run_remote_python(settings.ssh_alias)
+            wait_for_ssh_ready(
+                settings.ssh_alias,
+                config_path=settings.ssh_config_path,
+            )
+            result = run_remote_python(
+                settings.ssh_alias,
+                config_path=settings.ssh_config_path,
+            )
         finally:
             try:
                 client.terminate_job(launched.job_id)

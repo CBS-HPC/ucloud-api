@@ -1,3 +1,5 @@
+from pathlib import Path
+
 from ucloud_workflow.jobs import (
     build_cpu_product_id,
     build_job_specification,
@@ -7,6 +9,7 @@ from ucloud_workflow.jobs import (
     parse_ssh_command,
     submit_job_from_latest_template,
     template_job_specification,
+    update_ssh_config,
 )
 
 
@@ -85,6 +88,22 @@ def test_parse_ssh_command_splits_user_host_port() -> None:
         "host.example",
         "2222",
     )
+
+
+def test_update_ssh_config_writes_explicit_identity_files(tmp_path) -> None:
+    config_path = tmp_path / "ssh" / "config"
+    identity_file = tmp_path / "keys" / "id_ed25519"
+
+    update_ssh_config(
+        "ssh ucloud@host.example -p 2222",
+        alias="ucloud",
+        config_path=config_path,
+        identity_files=[identity_file],
+    )
+
+    config_text = config_path.read_text(encoding="utf-8")
+    assert f'IdentityFile "{identity_file.as_posix()}"' in config_text
+    assert "IdentitiesOnly" not in config_text
 
 
 def test_template_job_specification_uses_explicit_job_id() -> None:

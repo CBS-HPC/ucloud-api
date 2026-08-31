@@ -51,6 +51,7 @@ foreach ($rawLine in Get-Content .\kristoffer_test.env) {
 }
 
 $sshAlias = if ($env:UCLOUD_SSH_ALIAS) { $env:UCLOUD_SSH_ALIAS } else { "ucloud" }
+$sshConfigPath = if ($env:UCLOUD_SSH_CONFIG_PATH) { $env:UCLOUD_SSH_CONFIG_PATH } else { Join-Path $env:USERPROFILE ".ssh\config" }
 $workFolder = if ($env:UCLOUD_WORK_FOLDER) { $env:UCLOUD_WORK_FOLDER.TrimEnd("/") } else { "/work/moody_agent" }
 $jobId = $null
 
@@ -69,6 +70,7 @@ try {
     $timestamp = (Get-Date).ToUniversalTime().ToString("yyyy-MM-ddTHH:mm:ssZ")
     $remoteCommand = "mkdir -p '$workFolder' && printf '%s\n' 'dummy api test job=$jobId utc=$timestamp' > '$workFolder/dummy.txt' && test -s '$workFolder/dummy.txt' && ls -l '$workFolder/dummy.txt' && cat '$workFolder/dummy.txt'"
     & ssh `
+        -F $sshConfigPath `
         -o BatchMode=yes `
         -o ConnectTimeout=20 `
         -o ServerAliveInterval=15 `
@@ -104,6 +106,7 @@ The successful run should show:
 - `Missing required environment variables`: `kristoffer_test.env` was not loaded correctly or is missing required values.
 - `Timed out ... waiting for UCloud to expose an SSH command`: the template job is probably not SSH-capable.
 - `ssh: Could not resolve hostname ucloud`: SSH config was not written; rerun `ucloud workflow run` and check its output.
+- `Permission denied (publickey)`: confirm `UCLOUD_SSH_CONFIG_PATH` points to the same config file used by the CLI and that the key is beside it or set `UCLOUD_SSH_IDENTITY_FILE`.
 - `Permission denied` or write failure under `$UCLOUD_WORK_FOLDER`: the template job does not expose a writable work folder at that path.
 
 ## Cleanup check

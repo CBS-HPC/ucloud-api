@@ -171,7 +171,12 @@ def wait_job(
             timeout_seconds=timeout_seconds,
             poll_interval_seconds=poll_interval_seconds,
         )
-        config_info = update_ssh_config(ssh_command, alias=settings.ssh_alias, config_path=settings.ssh_config_path)
+        config_info = update_ssh_config(
+            ssh_command,
+            alias=settings.ssh_alias,
+            config_path=settings.ssh_config_path,
+            identity_files=settings.resolved_ssh_identity_files(),
+        )
 
     console.print(f"SSH command: {ssh_command}")
     console.print(f"SSH config updated for {config_info['alias']}")
@@ -298,7 +303,12 @@ def run_workflow(
             template_job_id=template_job_id,
         )
         job, ssh_command = wait_for_running_job(client, launched.job_id)
-        update_ssh_config(ssh_command, alias=settings.ssh_alias, config_path=settings.ssh_config_path)
+        update_ssh_config(
+            ssh_command,
+            alias=settings.ssh_alias,
+            config_path=settings.ssh_config_path,
+            identity_files=settings.resolved_ssh_identity_files(),
+        )
 
     console.print(f"Job submitted: {launched.job_id}")
     console.print(f"SSH command: {ssh_command}")

@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from collections.abc import Mapping, MutableMapping
+from collections.abc import Mapping, MutableMapping, Sequence
 from copy import deepcopy
 from dataclasses import dataclass
 from pathlib import Path
@@ -308,6 +308,7 @@ def update_ssh_config(
     *,
     alias: str,
     config_path: Path,
+    identity_files: Sequence[Path] = (),
 ) -> dict[str, str]:
     user, host, port = parse_ssh_command(ssh_command)
     config_path.parent.mkdir(parents=True, exist_ok=True)
@@ -320,6 +321,10 @@ def update_ssh_config(
         f"    HostName {host}",
         f"    User {user}",
         f"    Port {port}",
+        *(
+            f'    IdentityFile "{identity_file.as_posix()}"'
+            for identity_file in identity_files
+        ),
         "    StrictHostKeyChecking no",
         "    UserKnownHostsFile /dev/null",
         "    LogLevel ERROR",

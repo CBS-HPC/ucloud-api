@@ -53,6 +53,21 @@ def test_build_helpers_format_remote_commands() -> None:
     assert transfer.build_pip_install_command("mypkg", editable=True) == "python3 -m pip install --user -e ./mypkg"
 
 
+def test_ssh_and_scp_commands_use_the_selected_config_file(tmp_path: Path) -> None:
+    config_path = tmp_path / "portable-ssh" / "config"
+
+    assert transfer.ssh_command("ucloud", "true", config_path=config_path)[:3] == [
+        "ssh",
+        "-F",
+        str(config_path),
+    ]
+    assert transfer.scp_command("input.txt", "ucloud:/work/input.txt", config_path=config_path)[:3] == [
+        "scp",
+        "-F",
+        str(config_path),
+    ]
+
+
 def test_example_worker_creates_dummy_output(tmp_path) -> None:
     examples_dir = transfer.default_examples_dir()
     worker_script = examples_dir / "worker.py"
@@ -94,6 +109,7 @@ def test_run_remote_python_job_uploads_script_package_and_downloads_outputs(
         token="token",
         project="Moody's Datahub",
         work_folder="/work/moody_agent",
+        ssh_config_path=tmp_path / "portable-ssh" / "config",
     )
 
     terminated_job_ids: list[str] = []
@@ -102,6 +118,8 @@ def test_run_remote_python_job_uploads_script_package_and_downloads_outputs(
     remote_commands: list[str] = []
     downloaded_paths: list[Path] = []
     analysis_calls: list[tuple[Path, str | None]] = []
+    transport_config_paths: list[Path] = []
+    ssh_config_calls: list[dict[str, object]] = []
 
     class DummyClient:
         def __init__(self, _settings: Settings) -> None:
@@ -126,9 +144,21 @@ def test_run_remote_python_job_uploads_script_package_and_downloads_outputs(
         ),
     )
     monkeypatch.setattr(transfer, "wait_for_running_job", lambda client, job_id: ({}, "ssh ucloud@host -p 22"))
-    monkeypatch.setattr(transfer, "update_ssh_config", lambda *args, **kwargs: None)
-    monkeypatch.setattr(transfer, "remote_mkdir", lambda *args, **kwargs: None)
-    monkeypatch.setattr(transfer, "remote_path_exists", lambda *args, **kwargs: True)
+    monkeypatch.setattr(
+        transfer,
+        "update_ssh_config",
+        lambda *args, **kwargs: ssh_config_calls.append(kwargs),
+    )
+    monkeypatch.setattr(
+        transfer,
+        "remote_mkdir",
+        lambda *args, **kwargs: transport_config_paths.append(kwargs["config_path"]),
+    )
+    monkeypatch.setattr(
+        transfer,
+        "remote_path_exists",
+        lambda *args, **kwargs: transport_config_paths.append(kwargs["config_path"]) or True,
+    )
     monkeypatch.setattr(transfer, "remote_dir_list", lambda *args, **kwargs: "main.py\nmypkg")
     monkeypatch.setattr(
         transfer,
@@ -141,17 +171,24 @@ def test_run_remote_python_job_uploads_script_package_and_downloads_outputs(
     monkeypatch.setattr(
         transfer,
         "scp_upload",
-        lambda alias, local_path, remote_path, **_kwargs: uploaded_paths.append((Path(local_path).name, remote_path)),
+        lambda alias, local_path, remote_path, **kwargs: (
+            transport_config_paths.append(kwargs["config_path"]),
+            uploaded_paths.append((Path(local_path).name, remote_path)),
+        ),
     )
     monkeypatch.setattr(
         transfer,
         "run_remote_shell_command",
-        lambda alias, remote_dir, command, **_kwargs: remote_commands.append(command),
+        lambda alias, remote_dir, command, **kwargs: (
+            transport_config_paths.append(kwargs["config_path"]),
+            remote_commands.append(command),
+        ),
     )
     monkeypatch.setattr(
         transfer,
         "scp_download",
-        lambda alias, remote_path, local_path, **_kwargs: (
+        lambda alias, remote_path, local_path, **kwargs: (
+            transport_config_paths.append(kwargs["config_path"]),
             local_path.parent.mkdir(parents=True, exist_ok=True),
             downloaded_paths.append(local_path),
             local_path.write_text("downloaded", encoding="utf-8"),
@@ -193,6 +230,8 @@ def test_run_remote_python_job_uploads_script_package_and_downloads_outputs(
     assert analysis_calls == [
         (result.local_output_dir / "job-report.csv", "cpu-amd-zen5-128-vcpu"),
     ]
+    assert ssh_config_calls == [{"alias": "ucloud", "config_path": settings.ssh_config_path, "identity_files": ()}]
+    assert set(transport_config_paths) == {settings.ssh_config_path}
     assert terminated_job_ids == ["job-abc123"]
 
 
