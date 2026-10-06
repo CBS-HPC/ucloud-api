@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from collections.abc import Callable, Sequence
+from collections.abc import Callable, Mapping, Sequence
 import math
 import os
 import shlex
@@ -599,7 +599,11 @@ def run_remote_python_job(
     *,
     name: str | None = None,
     template_job_id: str | None = None,
+    product: Mapping[str, str] | None = None,
+    use_template_product: bool = False,
 ) -> RemotePythonJobResult:
+    if use_template_product and product is not None:
+        raise ValueError("use_template_product cannot be combined with product")
     if not spec.script_path.is_file():
         raise FileNotFoundError(f"Missing Python script: {spec.script_path}")
 
@@ -615,7 +619,8 @@ def run_remote_python_job(
     with UCloudClient(settings) as client:
         launched = submit_job_from_latest_template(
             client,
-            size=settings.default_size,
+            size=None if product is not None or use_template_product else settings.default_size,
+            product=product,
             hours=settings.default_hours,
             name=name or f"{spec.job_name_prefix}-{run_id}",
             ssh_enabled=True,
@@ -809,7 +814,11 @@ def run_ssh_transfer_demo(
     delay_seconds: int = 0,
     poll_seconds: int = DEFAULT_POLL_SECONDS,
     template_job_id: str | None = None,
+    product: Mapping[str, str] | None = None,
+    use_template_product: bool = False,
 ) -> SSHTransferDemoResult:
+    if use_template_product and product is not None:
+        raise ValueError("use_template_product cannot be combined with product")
     examples_dir = examples_dir or default_examples_dir()
     worker_script_path = examples_dir / "worker.py"
     dummy_input_path = examples_dir / DEFAULT_DUMMY_INPUT_NAME
@@ -829,7 +838,8 @@ def run_ssh_transfer_demo(
     with UCloudClient(settings) as client:
         launched = submit_job_from_latest_template(
             client,
-            size=settings.default_size,
+            size=None if product is not None or use_template_product else settings.default_size,
+            product=product,
             hours=settings.default_hours,
             name=f"ssh-transfer-demo-{run_id}",
             ssh_enabled=True,

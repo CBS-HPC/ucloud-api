@@ -1,5 +1,7 @@
 from pathlib import Path
 
+import pytest
+
 from ucloud_workflow.jobs import (
     build_cpu_product_id,
     build_job_specification,
@@ -34,6 +36,24 @@ def test_build_job_specification_rewrites_product_and_time_allocation() -> None:
     assert spec["product"]["id"] == build_cpu_product_id("128-vcpu")
     assert spec["timeAllocation"]["hours"] == 3
     assert spec["name"] == "demo"
+
+
+def test_build_job_specification_uses_explicit_gpu_product() -> None:
+    product = {"id": "gpu-nvidia-b200-1-gpu", "category": "gpu-nvidia-b200", "provider": "ucloud"}
+    template = {"product": {"id": "cpu-amd-zen5-8-vcpu", "category": "cpu-amd-zen5", "provider": "ucloud"}}
+
+    specification = build_job_specification(template, product=product, hours=1)
+
+    assert specification["product"] == product
+    assert template["product"]["id"] == "cpu-amd-zen5-8-vcpu"
+
+
+def test_build_job_specification_preserves_explicit_category_and_provider() -> None:
+    product = {"id": "gpu-test", "category": "custom-gpu", "provider": "custom-provider"}
+
+    specification = build_job_specification({}, product=product, hours=1)
+
+    assert specification["product"] == product
 
 
 def test_build_job_specification_adds_mount_resources() -> None:
@@ -143,3 +163,90 @@ def test_submit_job_from_latest_template_uses_template_job_id() -> None:
     assert result.job_id == "job-new123"
     assert client.specification["sshEnabled"] is True
     assert result.product_id == build_cpu_product_id("128-vcpu")
+
+
+@pytest.mark.parametrize("product_id", ["gpu-nvidia-b200-1-gpu", "gpu-nvidia-b200-1-mig.1g"])
+@pytest.mark.parametrize("retain_template_product", [False, True])
+def test_submit_gpu_job_preserves_template_and_returns_selected_product(
+    product_id: str,
+    retain_template_product: bool,
+) -> None:
+    product = {"id": product_id, "category": "gpu-nvidia-b200", "provider": "ucloud"}
+    template = {
+        "product": product,
+        "application": {"name": "gpu-test-app", "version": "1.0"},
+        "parameters": {"input": {"type": "file", "path": "/drive/input"}, "count": {"value": 1}},
+        "resources": [
+            {"type": "file", "path": "/drive/work", "readOnly": False},
+            {"type": "ingress", "id": "test-link"},
+            {"type": "license", "id": "test-license"},
+        ],
+        "replicas": 1,
+    }
+
+    class DummyClient:
+        settings = type("Settings", (), {"server": "https://cloud.sdu.dk"})()
+
+        def retrieve_job(self, job_id: str, *, include_updates: bool = True):
+            return {"specification": template}
+
+        def submit_job(self, specification):
+            self.specification = specification
+            return {"responses": [{"id": "new-test-job"}]}
+
+    client = DummyClient()
+    result = submit_job_from_latest_template(
+        client,
+        hours=1,
+        product=None if retain_template_product else product,
+        template_job_id="test-template",
+    )
+
+    assert result.product_id == product_id
+    assert client.specification["product"] == product
+    for field in ("application", "parameters", "resources", "replicas"):
+        assert client.specification[field] == template[field]
+    client.specification["parameters"]["count"]["value"] = 2
+    assert template["parameters"]["count"]["value"] == 1
+
+
+def test_build_job_specification_merges_mounts_without_losing_public_links() -> None:
+    product = {"id": "gpu-nvidia-b200-1-gpu", "category": "gpu-nvidia-b200", "provider": "ucloud"}
+    template = {"product": product, "resources": [{"type": "ingress", "id": "test-link"}]}
+
+    specification = build_job_specification(template, hours=1, mounts=["/drive/work"])
+
+    assert specification["resources"] == [
+        {"type": "ingress", "id": "test-link"},
+        {"type": "file", "path": "/drive/work", "readOnly": False},
+    ]
+    assert template["resources"] == [{"type": "ingress", "id": "test-link"}]
+
+
+def test_build_job_specification_rejects_conflicting_size_and_product() -> None:
+    product = {"id": "gpu-nvidia-b200-1-gpu", "category": "gpu-nvidia-b200", "provider": "ucloud"}
+
+    with pytest.raises(ValueError, match="either CPU size or an explicit product"):
+        build_job_specification({}, size="8-vcpu", product=product, hours=1)
+
+
+@pytest.mark.parametrize("invalid_product", [
+    {},
+    {"id": "gpu-test"},
+    {"id": "gpu-test", "category": "gpu-test", "provider": " "},
+    {"id": "gpu-test", "category": "gpu-test", "provider": None},
+])
+def test_build_job_specification_rejects_incomplete_product(invalid_product) -> None:
+    with pytest.raises(ValueError, match="product must contain non-empty"):
+        build_job_specification({}, product=invalid_product, hours=1)
+
+
+def test_build_job_specification_requires_valid_product_when_inheriting() -> None:
+    with pytest.raises(ValueError, match="product must contain non-empty"):
+        build_job_specification({}, hours=1)
+
+
+@pytest.mark.parametrize("size", ["gpu-nvidia-b200-1-gpu", "gpu-nvidia-b200-1-mig.1g"])
+def test_build_cpu_product_id_rejects_gpu_ids_as_cpu_sizes(size: str) -> None:
+    with pytest.raises(ValueError, match="CPU size"):
+        build_cpu_product_id(size)

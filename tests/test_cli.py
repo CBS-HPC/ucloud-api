@@ -1,8 +1,10 @@
 from __future__ import annotations
 
 import io
+from types import SimpleNamespace
 
 import httpx
+import pytest
 import rich.console
 from typer.testing import CliRunner
 
@@ -19,6 +21,89 @@ def test_version_command_prints_package_version() -> None:
 
     assert result.exit_code == 0
     assert result.stdout.strip() == f"ucloud-workflow {__version__}"
+
+
+@pytest.mark.parametrize("command", [
+    ["jobs", "submit"],
+    ["workflow", "run"],
+    ["workflow", "ssh-transfer"],
+    ["workflow", "python-job"],
+])
+@pytest.mark.parametrize("selection", ["cpu-default", "explicit-product", "template-product"])
+def test_job_commands_forward_machine_selection(monkeypatch, tmp_path, command, selection) -> None:
+    captured = {}
+    settings = Settings(server="https://cloud.sdu.dk", token="test", project="test", default_size="128-vcpu")
+    launched = SimpleNamespace(
+        job_id="test-job",
+        job_url="test",
+        local_output_path=tmp_path / "out.txt",
+        local_output_dir=tmp_path,
+        downloaded_paths=(),
+        job_report_path=None,
+        remote_dir="/work/test",
+    )
+    product = {
+        "id": "gpu-nvidia-b200-1-mig.1g",
+        "category": "gpu-nvidia-b200",
+        "provider": "ucloud",
+    }
+
+    class DummyClient:
+        def __init__(self, _settings):
+            pass
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            pass
+
+    def capture_call(*_args, **kwargs):
+        captured.update(kwargs)
+        return launched
+
+    monkeypatch.setattr(cli, "_load_settings", lambda **_kwargs: settings)
+    monkeypatch.setattr(cli, "UCloudClient", DummyClient)
+    monkeypatch.setattr(cli, "submit_job_from_latest_template", capture_call)
+    monkeypatch.setattr(cli, "run_remote_python_job", capture_call)
+    monkeypatch.setattr(cli, "run_ssh_transfer_demo", capture_call)
+    monkeypatch.setattr(cli, "wait_for_running_job", lambda *_args: ({}, "ssh test@host -p 22"))
+    monkeypatch.setattr(cli, "update_ssh_config", lambda *_args, **_kwargs: {})
+    options = []
+    if selection == "template-product":
+        options = ["--use-template-product"]
+    elif selection == "explicit-product":
+        options = [
+            "--product-id", product["id"],
+            "--product-category", product["category"],
+            "--product-provider", product["provider"],
+        ]
+    if command[-1] == "python-job":
+        script = tmp_path / "test.py"
+        script.write_text("print('test')", encoding="utf-8")
+        options.extend(["--script", str(script)])
+
+    result = CliRunner().invoke(app, [*command, *options])
+
+    assert result.exit_code == 0, result.output
+    assert captured["product"] == (product if selection == "explicit-product" else None)
+    if command[-1] in {"submit", "run"}:
+        assert captured["size"] == (settings.default_size if selection == "cpu-default" else None)
+    else:
+        assert captured["use_template_product"] is (selection == "template-product")
+
+
+@pytest.mark.parametrize("options", [
+    ["--product-id", "gpu-test"],
+    ["--product-category", "gpu-test", "--product-provider", "ucloud"],
+    ["--use-template-product", "--size", "8-vcpu"],
+    ["--size", "8-vcpu", "--product-id", "gpu-test", "--product-category", "gpu-test", "--product-provider", "ucloud"],
+    ["--use-template-product", "--product-id", "gpu-test", "--product-category", "gpu-test", "--product-provider", "ucloud"],
+])
+def test_job_submit_rejects_conflicting_or_partial_product_options(options) -> None:
+    result = CliRunner().invoke(app, ["jobs", "submit", *options])
+
+    assert result.exit_code == 2
 
 
 def test_token_status_displays_metadata_without_a_token_secret(monkeypatch) -> None:

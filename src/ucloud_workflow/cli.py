@@ -78,6 +78,27 @@ def _resolve_template_job_id(settings: Settings, profile: str | None) -> str | N
         raise typer.BadParameter(str(exc)) from exc
 
 
+def _product_from_options(
+    *,
+    size: str | None,
+    product_id: str | None,
+    product_category: str | None,
+    product_provider: str | None,
+    use_template_product: bool,
+) -> dict[str, str] | None:
+    values = (product_id, product_category, product_provider)
+    has_product = any(value is not None for value in values)
+    if use_template_product and (size is not None or has_product):
+        raise typer.BadParameter("--use-template-product cannot be combined with --size or product options")
+    if has_product:
+        if size is not None:
+            raise typer.BadParameter("Choose --size or product options, not both")
+        if any(value is None or not value.strip() for value in values):
+            raise typer.BadParameter("Supply --product-id, --product-category, and --product-provider together")
+        return {"id": product_id, "category": product_category, "provider": product_provider}
+    return None
+
+
 def _join_notes(notes: tuple[str, ...]) -> str:
     return "; ".join(notes) if notes else "-"
 
@@ -119,7 +140,11 @@ def wallets(
 
 @jobs_app.command("submit")
 def submit_job(
-    size: str = typer.Option(None, help="UCloud CPU size, for example 128-vcpu"),
+    size: str | None = typer.Option(None, help="UCloud CPU size, for example 128-vcpu"),
+    product_id: str | None = typer.Option(None, help="Exact UCloud product id for CPU, GPU, or MIG"),
+    product_category: str | None = typer.Option(None, help="Exact UCloud product category"),
+    product_provider: str | None = typer.Option(None, help="Exact UCloud provider id"),
+    use_template_product: bool = typer.Option(False, help="Keep the template machine instead of the default CPU size"),
     hours: int | None = typer.Option(None, help="Time allocation in hours"),
     name: str | None = typer.Option(None, help="Optional job name"),
     profile: str | None = typer.Option(None, help="Standard job profile name, for example vscode-remote-session"),
@@ -135,12 +160,17 @@ def submit_job(
     project: str | None = typer.Option(None, help="Project header"),
 ) -> None:
     """Submit a job using the configured template."""
+    product = _product_from_options(
+        size=size, product_id=product_id, product_category=product_category,
+        product_provider=product_provider, use_template_product=use_template_product,
+    )
     settings = _load_settings(server=server, token=token, project=project)
     template_job_id = _resolve_template_job_id(settings, profile)
     with UCloudClient(settings) as client:
         result = submit_job_from_latest_template(
             client,
-            size=size or settings.default_size,
+            size=None if product is not None or use_template_product else size or settings.default_size,
+            product=product,
             hours=hours if hours is not None else settings.default_hours,
             name=name,
             mounts=mount,
@@ -263,7 +293,11 @@ def scaffold_script(
 
 @workflow_app.command("run")
 def run_workflow(
-    size: str = typer.Option(None, help="UCloud CPU size"),
+    size: str | None = typer.Option(None, help="UCloud CPU size"),
+    product_id: str | None = typer.Option(None, help="Exact UCloud product id for CPU, GPU, or MIG"),
+    product_category: str | None = typer.Option(None, help="Exact UCloud product category"),
+    product_provider: str | None = typer.Option(None, help="Exact UCloud provider id"),
+    use_template_product: bool = typer.Option(False, help="Keep the template machine instead of the default CPU size"),
     hours: int | None = typer.Option(None, help="Time allocation in hours"),
     name: str | None = typer.Option(None, help="Optional job name"),
     profile: str | None = typer.Option(None, help="Standard job profile name, for example cpu-python-batch"),
@@ -282,6 +316,10 @@ def run_workflow(
     open_vscode: bool = typer.Option(False, help="Try to open VS Code after config is written"),
 ) -> None:
     """Submit a configured template job and prepare SSH access."""
+    product = _product_from_options(
+        size=size, product_id=product_id, product_category=product_category,
+        product_provider=product_provider, use_template_product=use_template_product,
+    )
     settings = _load_settings(
         server=server,
         token=token,
@@ -295,7 +333,8 @@ def run_workflow(
     with UCloudClient(settings) as client:
         launched = submit_job_from_latest_template(
             client,
-            size=size or settings.default_size,
+            size=None if product is not None or use_template_product else size or settings.default_size,
+            product=product,
             hours=hours if hours is not None else settings.default_hours,
             name=name,
             mounts=mount,
@@ -318,6 +357,10 @@ def run_workflow(
 
 @workflow_app.command("ssh-transfer")
 def ssh_transfer(
+    product_id: str | None = typer.Option(None, help="Exact UCloud product id for CPU, GPU, or MIG"),
+    product_category: str | None = typer.Option(None, help="Exact UCloud product category"),
+    product_provider: str | None = typer.Option(None, help="Exact UCloud provider id"),
+    use_template_product: bool = typer.Option(False, help="Keep the template machine instead of the default CPU size"),
     delay_seconds: float = typer.Option(3.0, "--delay", help="Delay before the dummy output is written"),
     poll_seconds: int = typer.Option(2, "--poll", help="Polling interval in seconds"),
     output: Path | None = typer.Option(
@@ -331,6 +374,10 @@ def ssh_transfer(
     project: str | None = typer.Option(None, help="Project header"),
 ) -> None:
     """Run the SSH transfer demo and terminate the job after the dummy output is downloaded."""
+    product = _product_from_options(
+        size=None, product_id=product_id, product_category=product_category,
+        product_provider=product_provider, use_template_product=use_template_product,
+    )
     settings = _load_settings(server=server, token=token, project=project)
     template_job_id = _resolve_template_job_id(settings, profile)
     result = run_ssh_transfer_demo(
@@ -339,6 +386,8 @@ def ssh_transfer(
         poll_seconds=poll_seconds,
         local_output_path=output,
         template_job_id=template_job_id,
+        product=product,
+        use_template_product=use_template_product,
     )
     console.print(f"Job submitted: {result.job_id}")
     console.print(f"Local output file: {result.local_output_path}")
@@ -503,7 +552,11 @@ def python_job(
         Path("artifacts/python-job"),
         help="Local directory for downloaded files",
     ),
-    size: str = typer.Option(None, help="UCloud CPU size"),
+    size: str | None = typer.Option(None, help="UCloud CPU size"),
+    product_id: str | None = typer.Option(None, help="Exact UCloud product id for CPU, GPU, or MIG"),
+    product_category: str | None = typer.Option(None, help="Exact UCloud product category"),
+    product_provider: str | None = typer.Option(None, help="Exact UCloud provider id"),
+    use_template_product: bool = typer.Option(False, help="Keep the template machine instead of the default CPU size"),
     hours: int | None = typer.Option(None, help="Time allocation in hours"),
     name: str | None = typer.Option(None, help="Optional job name"),
     profile: str | None = typer.Option(None, help="Standard job profile name for the batch runner"),
@@ -514,6 +567,10 @@ def python_job(
     work_folder: str | None = typer.Option(None, help="Remote folder to open"),
 ) -> None:
     """Upload a Python script, install a local package, run it, and download outputs."""
+    product = _product_from_options(
+        size=size, product_id=product_id, product_category=product_category,
+        product_provider=product_provider, use_template_product=use_template_product,
+    )
     settings = _load_settings(
         server=server,
         token=token,
@@ -539,7 +596,10 @@ def python_job(
         output_paths=tuple(output),
         local_output_root=local_output_root,
     )
-    result = run_remote_python_job(settings, spec, name=name, template_job_id=template_job_id)
+    result = run_remote_python_job(
+        settings, spec, name=name, template_job_id=template_job_id,
+        product=product, use_template_product=use_template_product,
+    )
 
     console.print(f"Job submitted: {result.job_id}")
     console.print(f"Local output directory: {result.local_output_dir}")

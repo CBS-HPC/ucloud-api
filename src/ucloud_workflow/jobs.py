@@ -122,19 +122,31 @@ def template_job_specification(
 def build_job_specification(
     template: Mapping[str, Any],
     *,
-    size: str,
+    size: str | None = None,
+    product: Mapping[str, str] | None = None,
     hours: int,
     name: str | None = None,
     ssh_enabled: bool = True,
     mounts: list[str] | None = None,
     read_only_mounts: list[str] | None = None,
 ) -> dict[str, Any]:
+    if size is not None and product is not None:
+        raise ValueError("Choose either CPU size or an explicit product, not both")
     specification = clean_specification(template)
-    specification["product"] = {
-        "id": build_cpu_product_id(size),
-        "category": "cpu-amd-zen5",
-        "provider": "ucloud",
-    }
+    if size is not None:
+        specification["product"] = {
+            "id": build_cpu_product_id(size),
+            "category": "cpu-amd-zen5",
+            "provider": "ucloud",
+        }
+    elif product is not None:
+        specification["product"] = dict(product)
+    selected_product = specification.get("product")
+    if not isinstance(selected_product, Mapping) or any(
+        not isinstance(selected_product.get(field), str) or not selected_product[field].strip()
+        for field in ("id", "category", "provider")
+    ):
+        raise ValueError("product must contain non-empty id, category, and provider strings")
     specification["timeAllocation"] = {"hours": hours, "minutes": 0, "seconds": 0}
     specification["sshEnabled"] = ssh_enabled
     if mounts or read_only_mounts:
@@ -152,6 +164,8 @@ def build_cpu_product_id(size: str) -> str:
     clean_size = size.strip()
     if not clean_size:
         raise ValueError("size must not be empty")
+    if not re.fullmatch(r"[1-9]\d*-vcpu", clean_size):
+        raise ValueError("CPU size must have the form '8-vcpu'; use product for a full product reference")
     return f"cpu-amd-zen5-{clean_size}"
 
 
@@ -169,7 +183,8 @@ def extract_job_id(submission_response: Mapping[str, Any]) -> str:
 def submit_job_from_latest_template(
     client: UCloudClient,
     *,
-    size: str,
+    size: str | None = None,
+    product: Mapping[str, str] | None = None,
     hours: int,
     name: str | None = None,
     ssh_enabled: bool = True,
@@ -181,6 +196,7 @@ def submit_job_from_latest_template(
     specification = build_job_specification(
         template,
         size=size,
+        product=product,
         hours=hours,
         name=name,
         ssh_enabled=ssh_enabled,
@@ -193,7 +209,7 @@ def submit_job_from_latest_template(
         job_id=job_id,
         ssh_command="",
         job_url=f"{client.settings.server.rstrip('/')}/app/jobs/properties/{job_id}",
-        product_id=build_cpu_product_id(size),
+        product_id=specification["product"]["id"],
     )
 
 

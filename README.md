@@ -57,6 +57,8 @@ uv run ucloud tokens status --within-days 30
 
 `ucloud delivery package` creates an archive locally; it does not send data to a user or external storage service.
 
+Job-launching commands keep the existing CPU default unless you choose an explicit product with `--product-id`, `--product-category`, and `--product-provider`, or use `--use-template-product` to retain the template's machine. CPU, full GPU, and MIG products use the same workflow; the operator or calling integration chooses the machine. See [machine selection](docs/reference/api.md#machine-selection).
+
 ## Documentation
 
 - [Documentation index](docs/README.md)
@@ -68,4 +70,4 @@ uv run ucloud tokens status --within-days 30
 
 ## Release status
 
-The project is an internal `0.1.x` release candidate. Before publishing a release, update the version and changelog, build fresh wheel/source artifacts, commit the changes, tag the release, and push it.
+The project is an internal `0.1.x` CLI tool. Tagged [GitHub releases](https://github.com/CBS-HPC/ucloud-api/releases) include a wheel and source archive. Before publishing a release, update the version and changelog, validate fresh build artifacts, commit the changes, tag the release, and push it.

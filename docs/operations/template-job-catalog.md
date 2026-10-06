@@ -19,6 +19,7 @@ Each catalog entry should record:
 - `purpose`
 - `template_job_id`
 - `machine_type`
+- `product_id`, `product_category`, and `product_provider` (exact values from the job specification)
 - `gpu_type`
 - `ssh_enabled`
 - `working_directory`
@@ -59,3 +60,16 @@ A catalog gives you:
 - one template for RStudio or similar containerized sessions
 
 The CLI reads these ids from `UCLOUD_TEMPLATE_JOB_ID` and profile-specific `UCLOUD_TEMPLATE_JOB_ID_<PROFILE>` variables; this document is the operational record of which values are known to work.
+
+Template selection and machine selection are separate. Use `--use-template-product` to retain a template's GPU/MIG product, or provide all three explicit product options to change the machine while retaining its application and resources. Otherwise the CLI applies `UCLOUD_DEFAULT_SIZE` as a CPU override. Changing hardware does not make an incompatible application GPU-ready. See [machine selection](../reference/api.md#machine-selection).
+
+## Verified GPU product-selection smoke test
+
+On 2026-10-06, the configured Python SSH template (`8985848`, `coder-python` 1.89.1, originally `cpu-amd-zen5-128-vcpu`) was used to submit both:
+
+| Product ID | Category | Provider | Result |
+| --- | --- | --- | --- |
+| `gpu-nvidia-b200-1-gpu` | `gpu-nvidia-b200` | `ucloud` | Reached `RUNNING`; SSH and `nvidia-smi` succeeded; B200 reported 183359 MiB |
+| `gpu-nvidia-b200-1-mig.1g` | `gpu-nvidia-b200` | `ucloud` | Reached `RUNNING`; SSH and B200 device query succeeded; parent-GPU memory query reported insufficient permissions |
+
+The retrieved specifications matched the requested products and retained the template's application, parameters, resources, and replica count. Both newly created jobs were terminated after the probes and reached a terminal state. This verifies product selection and SSH/device visibility, not CUDA computation, inference software, GPU sizing, or MIG memory capacity. Template ids are project/access-specific; use your own known-good template outside this project.

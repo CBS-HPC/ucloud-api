@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.1.6 - 2026-10-06
+
+- Added explicit `id` / `category` / `provider` product selection for template-based CPU, GPU, and MIG jobs, without changing existing CPU `size` calls.
+- Added template-product preservation when low-level helpers receive no machine override, and `--use-template-product` for CLI workflows and higher-level Python runners.
+- Preserved template application parameters, mounts, public links, and other resources while changing the product; job launch results now report the actually submitted product id.
+- Rejected incomplete/conflicting machine selections and GPU/MIG product ids passed as CPU sizes.
+- Verified with 101 automated tests and live full-B200/MIG submissions from a real Python template; both jobs exposed SSH and were terminated after the smoke tests.
+
 ## 0.1.5 - 2026-08-31
 
 - Added `SSHTransportError` for completed `ssh` or `scp` processes that exit with code `255`, allowing callers to retry connection failures without parsing error text.

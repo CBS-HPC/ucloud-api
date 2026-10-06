@@ -54,6 +54,32 @@ def test_build_helpers_format_remote_commands() -> None:
     assert transfer.build_pip_install_command("mypkg", editable=True) == "python3 -m pip install --user -e ./mypkg"
 
 
+@pytest.mark.parametrize("runner", ["python-job", "ssh-transfer"])
+def test_runners_reject_conflicting_product_selection_before_submission(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    runner: str,
+) -> None:
+    settings = Settings(server="https://cloud.sdu.dk", token="test", project="test")
+    product = {"id": "gpu-test", "category": "custom-gpu", "provider": "custom-provider"}
+
+    def unexpected_client(*_args, **_kwargs):
+        raise AssertionError("Conflicting product selection must fail before client creation")
+
+    monkeypatch.setattr(transfer, "UCloudClient", unexpected_client)
+
+    with pytest.raises(ValueError, match="cannot be combined with product"):
+        if runner == "python-job":
+            transfer.run_remote_python_job(
+                settings,
+                transfer.RemotePythonJobSpec(script_path=tmp_path / "unused.py"),
+                product=product,
+                use_template_product=True,
+            )
+        else:
+            transfer.run_ssh_transfer_demo(settings, product=product, use_template_product=True)
+
+
 def test_ssh_and_scp_commands_use_the_selected_config_file(tmp_path: Path) -> None:
     config_path = tmp_path / "portable-ssh" / "config"
 
@@ -98,9 +124,15 @@ def test_example_worker_creates_dummy_output(tmp_path) -> None:
     assert "dummy input payload" in output_text
 
 
+@pytest.mark.parametrize("machine_options", [
+    {},
+    {"product": {"id": "gpu-nvidia-b200-1-gpu", "category": "gpu-nvidia-b200", "provider": "ucloud"}},
+    {"use_template_product": True},
+])
 def test_run_remote_python_job_uploads_script_package_and_downloads_outputs(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
+    machine_options: dict,
 ) -> None:
     script_path = tmp_path / "main.py"
     script_path.write_text("print('hello')\n", encoding="utf-8")
@@ -205,10 +237,12 @@ def test_run_remote_python_job_uploads_script_package_and_downloads_outputs(
         local_output_root=tmp_path / "artifacts",
     )
 
-    result = transfer.run_remote_python_job(settings, spec, name="demo-job")
+    result = transfer.run_remote_python_job(settings, spec, name="demo-job", **machine_options)
 
     assert submitted_kwargs["mounts"] == []
     assert submitted_kwargs["template_job_id"] is None
+    assert submitted_kwargs["size"] == (None if machine_options else settings.default_size)
+    assert submitted_kwargs["product"] == machine_options.get("product")
     assert uploaded_paths == [
         ("main.py", f"{result.remote_dir}/main.py"),
         ("mypkg", f"{result.remote_dir}/mypkg"),
@@ -236,9 +270,15 @@ def test_run_remote_python_job_uploads_script_package_and_downloads_outputs(
     assert terminated_job_ids == ["job-abc123"]
 
 
+@pytest.mark.parametrize("machine_options", [
+    {},
+    {"product": {"id": "gpu-nvidia-b200-1-mig.1g", "category": "gpu-nvidia-b200", "provider": "ucloud"}},
+    {"use_template_product": True},
+])
 def test_run_ssh_transfer_demo_uploads_static_files_and_downloads_output(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
+    machine_options: dict,
 ) -> None:
     examples_dir = make_example_tree(tmp_path / "examples")
     settings = Settings(
@@ -313,10 +353,12 @@ def test_run_ssh_transfer_demo_uploads_static_files_and_downloads_output(
         ),
     )
 
-    result = transfer.run_ssh_transfer_demo(settings, examples_dir=examples_dir)
+    result = transfer.run_ssh_transfer_demo(settings, examples_dir=examples_dir, **machine_options)
 
     assert submitted_kwargs["mounts"] == []
     assert submitted_kwargs["template_job_id"] is None
+    assert submitted_kwargs["size"] == (None if machine_options else settings.default_size)
+    assert submitted_kwargs["product"] == machine_options.get("product")
     assert uploaded_paths == [
         ("worker.py", f"{result.remote_dir}/worker.py"),
         ("dummy_input.txt", f"{result.remote_dir}/dummy_input.txt"),

@@ -248,21 +248,40 @@ Returns a reusable job specification.
 - If `template_job_id` is set, the code retrieves that job and uses its spec, including existing resources such as mounted drives.
 - Otherwise it uses the latest job returned by `/api/jobs/browse`.
 
-#### `build_job_specification(template, size, hours, name=None, ssh_enabled=True, mounts=None, read_only_mounts=None) -> dict`
+#### `build_job_specification(template, *, size=None, product=None, hours, name=None, ssh_enabled=True, mounts=None, read_only_mounts=None) -> dict`
 
-Clones a template spec and rewrites:
+Deep-copies a template specification. Select its machine with exactly one of these modes:
 
-- product
-- time allocation
-- SSH enablement
-- optional job name
+- `size="8-vcpu"`: backward-compatible CPU selection, producing `cpu-amd-zen5-8-vcpu` in category `cpu-amd-zen5` with provider `ucloud`.
+- `product={"id": ..., "category": ..., "provider": ...}`: an explicit product reference for CPU, full GPU, MIG, or another provider.
+- Omit both `size` and `product`: retain the template's existing product unchanged.
 
-Existing template `resources` are preserved. Explicit file/folder mounts are merged only when `mounts` or `read_only_mounts` are passed; this low-level path remains unverified against a real job.
+Combining `size` and `product` raises `ValueError`. Every selected product must contain non-empty string values for `id`, `category`, and `provider`. `size` accepts positive CPU sizes such as `8-vcpu`, not full GPU/MIG product ids.
+
+The helper sets the time allocation, SSH enablement, and optional job name. It preserves application settings, parameters, mounted drives, public links, and other template resources. Explicit file/folder mounts are merged only when `mounts` or `read_only_mounts` are passed; this low-level path remains unverified against a real job.
 
 #### `submit_job_from_latest_template(...) -> JobLaunchResult`
 
-Submits a CPU job based on the chosen template.
-The chosen template provides existing resources such as mounted drives; callers should pass `mounts` only for explicit low-level overrides.
+Submits a job based on the chosen template, using the same `size` / `product` / unchanged-template selection as `build_job_specification`. `JobLaunchResult.product_id` contains the id actually submitted, not a CPU-derived placeholder.
+
+The chosen template provides existing resources such as mounted drives; callers should pass `mounts` only for explicit low-level overrides. The caller chooses the machine and remains responsible for application compatibility, quota, and any GPU-sizing policy.
+
+```python
+from ucloud_workflow.jobs import submit_job_from_latest_template
+
+launched = submit_job_from_latest_template(
+    client,
+    template_job_id=settings.template_job_id,
+    hours=1,
+    product={
+        "id": "gpu-nvidia-b200-1-gpu",
+        "category": "gpu-nvidia-b200",
+        "provider": "ucloud",
+    },
+)
+```
+
+For one MIG slice, use `id="gpu-nvidia-b200-1-mig.1g"` with the same category and provider. To retain the template machine, omit `size` and `product` entirely. Reusing a public-link resource preserves its identifier; review resource sharing before running concurrent jobs from the same template.
 
 #### `wait_for_running_job(client, job_id, timeout_seconds=600, poll_interval_seconds=5)`
 
@@ -305,13 +324,13 @@ Fields:
 - `downloaded_paths`
 - `job_report_path`
 
-#### `run_remote_python_job(settings, spec, name=None, template_job_id=None) -> RemotePythonJobResult`
+#### `run_remote_python_job(settings, spec, *, name=None, template_job_id=None, product=None, use_template_product=False) -> RemotePythonJobResult`
 
 Python implementation behind the `ucloud workflow python-job` command.
 
 Behavior:
 
-1. submits a fresh UCloud CPU job
+1. submits a fresh UCloud job on the selected CPU, GPU, or MIG product
 2. waits for UCloud to publish an SSH command
 3. probes `ssh <alias> true` until the endpoint accepts a noninteractive connection
 4. creates a unique remote directory under `settings.work_folder`
@@ -325,6 +344,8 @@ Behavior:
 
 `template_job_id` may be passed explicitly when the caller wants a specific template job instead of the fallback stored in `Settings.template_job_id`.
 
+This higher-level runner retains `settings.default_size` as its CPU default for backward compatibility. Pass a complete `product` reference to override that default, or `use_template_product=True` to keep the template machine. Passing both raises `ValueError` before submitting a job.
+
 Every SSH/SCP process is noninteractive, time-bounded, and receives `-F <Settings.ssh_config_path>`. On Windows, a timeout runs `taskkill /T /F` for the transport process tree; on POSIX, the process group is killed. `RemoteCommandTimeoutError` and `SSHReadinessError` intentionally omit remote command text, so callers can safely record pre-execution failures.
 
 #### `SSHTransportError`
@@ -333,7 +354,7 @@ With the default `check=True`, `run_command(...)` raises this error when the loc
 
 Other nonzero SSH/SCP statuses remain `RuntimeError`; `check=False` always returns `CompletedProcess` for status inspection.
 
-#### `run_ssh_transfer_demo(settings, ..., template_job_id=None) -> SSHTransferDemoResult`
+#### `run_ssh_transfer_demo(settings, ..., template_job_id=None, product=None, use_template_product=False) -> SSHTransferDemoResult`
 
 Proof-of-concept smoke test that remains available for validation.
 
@@ -352,6 +373,8 @@ It keeps the following files as its demo payload:
 - if present, `/work/job-report.csv` is downloaded to `examples/job-report.csv`
 
 `template_job_id` may also be passed explicitly for the demo workflow.
+
+The demo accepts the same `product` and `use_template_product` options as `run_remote_python_job`, while keeping its existing CPU default and static payload. `examples/ssh_transfer_job.py` remains an unchanged CPU-default smoke-test wrapper.
 
 #### Other helpers
 
@@ -412,6 +435,32 @@ Run the commands with `uv run`.
 - `ucloud workflow analyze-utilization`
 
 All job-launching commands accept `--profile` to pick a named job family from the catalog. The profile controls which `UCLOUD_TEMPLATE_JOB_ID_<PROFILE>` variable is consulted before the global fallback.
+
+### Machine selection
+
+`ucloud jobs submit`, `ucloud workflow run`, `ucloud workflow python-job`, and `ucloud workflow ssh-transfer` accept:
+
+- `--product-id`, `--product-category`, and `--product-provider`: supply all three together to select an exact product reference.
+- `--use-template-product`: retain the selected template's machine instead of applying `UCLOUD_DEFAULT_SIZE`.
+
+`jobs submit`, `workflow run`, and `workflow python-job` also retain `--size` for CPU-only overrides. Explicit product options cannot be combined with `--size`; `--use-template-product` cannot be combined with either. Partial product references and conflicting options fail before API calls.
+
+With no machine-selection options, these CLI commands and the high-level Python runners retain the existing `UCLOUD_DEFAULT_SIZE` CPU behavior. Low-level `build_job_specification` and `submit_job_from_latest_template` instead retain the template machine when neither `size` nor `product` is passed. A `--profile gpu-batch-inference` selects a template source; it does not implicitly choose GPU hardware.
+
+```powershell
+# Submit one full B200 GPU using the configured template; stop it when finished.
+uv run ucloud jobs submit `
+  --product-id gpu-nvidia-b200-1-gpu `
+  --product-category gpu-nvidia-b200 `
+  --product-provider ucloud `
+  --hours 1
+uv run ucloud jobs stop JOB_ID
+
+# Retain a GPU/MIG template's existing product for the SSH smoke test.
+uv run ucloud workflow ssh-transfer --use-template-product
+```
+
+Use the exact product reference from a working UCloud job specification. Display labels in the static machine catalog are not substitutes for API provider/category identifiers. The CLI does not query live product availability or calculate GPU requirements.
 
 ### `ucloud workflow ssh-transfer`
 

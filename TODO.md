@@ -22,6 +22,10 @@
 - [x] Add a reusable catalog of `UCLOUD_TEMPLATE_JOB_ID` values by job family
 - [x] Add a standard job profile registry for common workload types
 - [x] Add a machine capability / availability overview tool
+- [x] Support explicit CPU/GPU/MIG product references and unchanged template products, with backwards-compatible CPU defaults
+- [x] Test product selection, conflicting arguments, preserved parameters/resources/public links, and actual launch product ids
+- [x] Live-test full GPU and MIG product selection from a real template, including SSH access and job termination
+  - Verified on 2026-10-06 with `coder-python` 1.89.1: both products reached `RUNNING`, exposed SSH and B200 hardware, retained template settings/resources, and were terminated immediately after the smoke test.
 - [x] Add read-only API-token expiry inspection from `/api/tokens/browse`
 - [x] Add controlled API-token creation with explicit `--yes` confirmation
 - [x] Test controlled replacement-token creation and validation against the live UCloud API

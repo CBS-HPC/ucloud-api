@@ -28,6 +28,25 @@ uv run ucloud workflow python-job `
 
 The downloaded files are stored in a unique local run folder under `artifacts/python-job/`. When available, `/work/job-report.csv` is downloaded too and the CLI prints a machine-size recommendation. SSH/SCP calls are noninteractive and time-bounded. The CLI logs the start, completion, or failure of each setup stage; a failed readiness or workspace-preparation stage terminates the job before the workload runs.
 
+### Run on GPU or MIG hardware
+
+Use a template with a compatible application/container and the drives your workload needs, and ensure your project has quota for the chosen product. Add explicit product options to the same Python workflow:
+
+```powershell
+uv run ucloud workflow python-job `
+  --script .\workload\gpu_batch.py `
+  --upload .\workload\input.csv `
+  --output output/result.csv `
+  --product-id gpu-nvidia-b200-1-gpu `
+  --product-category gpu-nvidia-b200 `
+  --product-provider ucloud `
+  --hours 1
+```
+
+For a single MIG slice, change the product id to `gpu-nvidia-b200-1-mig.1g`. If your template already uses the desired product, use `--use-template-product` instead of the three product options. Do not combine either mode with `--size`. Without these options, the CLI still applies its configured CPU default, including when the template or profile is GPU-oriented.
+
+The CLI preserves the template's application parameters and resources. Selecting GPU hardware does not install CUDA libraries or inference software; supply suitable package/setup commands and workload code yourself. Resource sizing belongs to the caller. See the [machine-selection reference](../reference/api.md#machine-selection).
+
 ## 2. Prepare delivery documentation
 
 Prepare human-readable documentation alongside the extracted data:
