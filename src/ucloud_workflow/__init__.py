@@ -28,7 +28,7 @@ else:
     try:
         __version__ = package_version("ucloud-workflow")
     except PackageNotFoundError:
-        __version__ = "0.1.8"
+        __version__ = "0.1.9"
 
 from .client import UCloudAPIError, UCloudClient
 from .settings import Settings, SettingsError

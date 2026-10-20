@@ -18,3 +18,7 @@ For the installed command and option list, run `uv run ucloud --help`.
 
 - [Run the SSH smoke test](operations/ssh-smoke-test.md)
 - [Maintain template jobs](operations/template-job-catalog.md)
+
+## License
+
+Original documentation is licensed under [CC BY 4.0](../LICENSE-DOCS); code snippets are licensed under [MIT](../LICENSE). See the [repository licensing notice](../README.md#license) for scope and attribution.

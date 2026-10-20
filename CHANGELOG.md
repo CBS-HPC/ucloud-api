@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+## 0.1.9 - 2026-10-20
+
+- Added MIT licensing for code and CC BY 4.0 for original documentation, with full license texts, scope and attribution notices, and packaged license files. Build metadata declares `MIT AND CC-BY-4.0`; the Hatchling minimum is 1.27 for default Core Metadata 2.4 support.
+
 ## 0.1.8 - 2026-10-20
 
 - Added `ucloud setup`: hidden token input, paginated project/drive/template discovery, explicit choices, confirmed storage-folder creation/reuse, and atomic environment-file updates without changing template mounts or registering SSH keys.

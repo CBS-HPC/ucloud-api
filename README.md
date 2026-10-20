@@ -91,3 +91,12 @@ Job-launching commands keep the existing CPU default unless you choose an explic
 ## Release status
 
 The project is an internal `0.1.x` CLI tool. Tagged [GitHub releases](https://github.com/CBS-HPC/ucloud-api/releases) include a wheel and source archive. Before publishing a release, update the version and changelog, validate fresh build artifacts, commit the changes, tag the release, and push it.
+
+## License
+
+- Code, including source, tests, example scripts, and code snippets in the documentation: [MIT](LICENSE).
+- Original documentation, including root Markdown files and prose under `docs/`: [Creative Commons Attribution 4.0 International (CC BY 4.0)](LICENSE-DOCS).
+
+For documentation attribution, credit **ucloud-api contributors**, link to [UCloud Workflow CLI](https://github.com/CBS-HPC/ucloud-api) and [CC BY 4.0](https://creativecommons.org/licenses/by/4.0/), and indicate changes when sharing modified documentation. Package metadata uses `MIT AND CC-BY-4.0` because these licenses cover different parts of the distribution, not a choice of license for the same material.
+
+Third-party material retains its own license. These licenses do not grant rights to user-supplied data or generated datasets.

@@ -1,12 +1,14 @@
 [build-system]
-requires = ["hatchling>=1.26"]
+requires = ["hatchling>=1.27"]
 build-backend = "hatchling.build"
 
 [project]
 name = "ucloud-workflow"
-version = "0.1.8"
+version = "0.1.9"
 description = "Python uv project for UCloud job automation and delivery packaging"
 readme = { file = "README.md", content-type = "text/markdown" }
+license = "MIT AND CC-BY-4.0"
+license-files = ["LICENSE", "LICENSE-DOCS"]
 requires-python = ">=3.11"
 keywords = ["ucloud", "hpc", "workflow", "job automation", "delivery packaging"]
 classifiers = [
