@@ -30,6 +30,10 @@ After UCloud reports a job as running, the CLI first probes the SSH endpoint bef
 uv run ucloud catalog profiles
 uv run ucloud catalog machines
 
+# Check live capacity and SSH public-key registration without starting a job.
+uv run ucloud catalog machines --live --provider ucloud --json
+uv run ucloud ssh-keys check
+
 # Verify SSH file transfer with the static dummy input and worker files.
 uv run ucloud workflow ssh-transfer --output artifacts/ssh-transfer/dummy_output.txt
 
@@ -56,6 +60,12 @@ uv run ucloud tokens status --within-days 30
 ```
 
 `ucloud delivery package` creates an archive locally; it does not send data to a user or external storage service.
+
+`ucloud links`, `ucloud ips`, `ucloud licenses`, and `ucloud ssh-keys` provide explicit resource-management commands. Writes preview unless `--yes` is supplied; they can allocate persistent resources or expose applications publicly. See [resource and SSH-key management](docs/reference/api.md#resource-and-ssh-key-management) before using them. Standalone allocations persist; optional Python per-run provisioning only cleans up resources that it created.
+
+`ucloud jobs submit --resources resources.json` selects existing links, IPs, and named application licenses while preserving the template. `ucloud jobs submit-immediate --candidates candidates.json` previews caller-approved machines; add `--yes` to submit one and terminate it if startup misses the deadline. Both commands accept `--no-ssh` for applications without SSH support. See [job resources](docs/reference/api.md#job-resource-selection-and-owned-cleanup) and [immediate startup](docs/reference/api.md#opt-in-immediate-startup).
+
+Live tests cover links, CBS Stata-license activations, SSH-key registration/deletion, resource-aware CPU jobs, owned cleanup, and startup cancellation. Public-IP creation was rejected by the project's zero quota; IP/firewall success and public-URL serving remain unverified. See [verification status](docs/reference/api.md#verification-status-and-remaining-integration).
 
 Job-launching commands keep the existing CPU default unless you choose an explicit product with `--product-id`, `--product-category`, and `--product-provider`, or use `--use-template-product` to retain the template's machine. CPU, full GPU, and MIG products use the same workflow; the operator or calling integration chooses the machine. See [machine selection](docs/reference/api.md#machine-selection).
 

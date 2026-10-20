@@ -2,6 +2,10 @@
 
 Use this manual procedure to verify that the `ucloud` CLI can start a UCloud job, connect over SSH, create `dummy.txt` in the configured remote work folder, verify the file, and stop the job.
 
+Before starting a billable job, you can run `uv run ucloud ssh-keys check`. This read-only check compares an explicit `.pub` file (`--public-key PATH`) or discovered public-key sidecars with the account's registered keys. `MATCHED` exits zero; `NOT_REGISTERED` and `UNVERIFIABLE` exit nonzero. An unverifiable result does not rule out SSH-agent authentication, and the check does not validate the remote endpoint.
+
+Use `uv run ucloud ssh-keys register --public-key PATH.pub --title TITLE` to preview registration; add `--yes` only after reviewing it. Never supply a private-key file. See [resource and SSH-key management](../reference/api.md#resource-and-ssh-key-management) for registration, deletion, and revocation limits. The static `examples/ssh_transfer_job.py` remains available unchanged.
+
 ## Goal
 
 Create this file inside the running UCloud job:

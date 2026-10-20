@@ -544,6 +544,178 @@ Standalone script wrapper around the same analyzer.
 
 Optional `--current-machine` prints a concrete next-machine suggestion.
 
+## Resource and SSH-key management
+
+These commands are explicit operator actions, not automatic provisioning around job runs. They use the existing `.env` settings. SSH public keys are account-owned; Public Links, Public IPs, and license activations are managed in the configured workspace.
+
+### Read-only commands
+
+```powershell
+uv run ucloud links list --json
+uv run ucloud links products --json
+uv run ucloud links show RESOURCE_ID --json
+uv run ucloud ips list --json
+uv run ucloud ips products --json
+uv run ucloud licenses list --json
+uv run ucloud licenses products --json
+uv run ucloud ssh-keys list --json
+uv run ucloud ssh-keys show KEY_ID --json
+uv run ucloud ssh-keys check
+uv run ucloud ssh-keys check --public-key .\keys\id_ed25519.pub
+```
+
+List commands follow pagination. SSH output contains titles, ids, creation timestamps, and computed fingerprints, not public-key text. The key check ignores comments; without a usable public-key sidecar it reports `UNVERIFIABLE`, not proof that SSH-agent authentication will fail. It never registers a key automatically.
+
+### Controlled writes
+
+Resource creation takes a JSON specification file containing a complete `product` reference (`id`, `category`, `provider`). Get those values from that resource's `products` command, not static catalog display labels. For example, `ip.json` could contain:
+
+```json
+{
+  "product": {
+    "id": "public-ip",
+    "category": "public-ip",
+    "provider": "ucloud"
+  }
+}
+```
+
+Commands preview unless `--yes` is supplied. Preview may perform read-only discovery but does not allocate resources or write operation records.
+
+```powershell
+uv run ucloud ips create --spec .\ip.json
+# Explicitly allocate only after reviewing the preview, allocation, and exposure.
+uv run ucloud ips create --spec .\ip.json --yes --wait --timeout 180
+uv run ucloud links create --spec .\link.json
+uv run ucloud licenses activate --spec .\license.json
+uv run ucloud links delete RESOURCE_ID
+uv run ucloud ips delete RESOURCE_ID
+uv run ucloud licenses delete RESOURCE_ID
+uv run ucloud ssh-keys register --public-key .\keys\id_ed25519.pub --title "Workstation key"
+uv run ucloud ssh-keys delete KEY_ID
+```
+
+Add `--yes` to confirm any of the preview-only examples. Public Link specifications additionally require `domain`, validated against the advertised provider prefix/suffix. IP specifications may include `firewall: {"openPorts": [...]}`; omission becomes an empty port list. This implementation refuses IP creation without advertised firewall support because it cannot enforce closed-by-default ports. Each port range needs integer `start`/`end` values within 1..65535 and `protocol` equal to `TCP` or `UDP`.
+
+License activation accepts an existing provider-configured product, not a vendor key or license-server configuration. Discovery is not proof of allocation, write permission, or license entitlement. Exposing an application does not configure its authentication.
+
+Public-key input must be a single OpenSSH key in a `.pub` file, validated locally using bounded `ssh-keygen`. Private-key markers, unsupported formats, and oversized files are rejected. Registration skips an already registered public key. Deleting an account key can affect other workflows; revocation on already-running jobs is not certified by this implementation.
+
+### Updates, readiness, and recovery
+
+The three resource groups support `wait RESOURCE_ID --timeout SECONDS`, `labels RESOURCE_ID --spec FILE`, and `acl RESOURCE_ID --spec FILE`. IPs also support `firewall RESOURCE_ID --spec FILE`. Updates preview unless `--yes` is present. A labels file is a string-to-string object; an ACL file contains explicit `added` and `deleted` lists in UCloud's ACL format; a firewall file contains an explicit `openPorts` list. ACL changes are not inferred from project roles or automatically broadened.
+
+Deletion checks visibility in the selected workspace, then retrieves the resource and refuses deletion if it is bound or its binding state cannot be established. Readiness polling has a finite budget. A readiness timeout does not delete the allocation.
+
+Confirmed creations write an atomic JSON operation record under `artifacts/resource-operations/` (override with `--operation-dir`). Records contain the namespace, workspace, confirmed resource id, and outcome; they omit API secrets, public-key text, and full specifications. Transport failures, server failures, and malformed success responses are treated as unknown creation outcomes. There is no automatic POST retry. Reconcile `pending`/`unknown` records against the workspace/account before retrying; do not delete unrelated resources. Resources can persist independently of jobs, and these commands do not perform automatic cleanup.
+
+The reusable Python functions live in `ucloud_workflow.resources` and `ucloud_workflow.ssh_keys`; they accept an existing `UCloudClient`. Python mutation functions execute when explicitly called; CLI preview/`--yes` is not an HTTP-client permission system. Use `prepare_resource` for a read-only resource-specification preflight. New management errors intentionally omit raw HTTP bodies; `CreateOutcomeUnknownError` distinguishes ambiguous creation from a known rejection. Its `operation_record` identifies the local journal; if saving a confirmed ID fails, `resource_id` retains that ID for reconciliation without putting it in the exception message. Interrupted POSTs also require reconciliation.
+
+### Job resource selection and owned cleanup
+
+`ucloud jobs submit --resources resources.json` and `submit_job_from_latest_template(..., resource_selection=...)` accept this selection shape:
+
+```json
+{
+  "links": ["EXISTING_LINK_ID"],
+  "ips": ["EXISTING_IP_ID"],
+  "licenses": {"application_license_parameter": "EXISTING_LICENSE_ID"}
+}
+```
+
+Omit unused fields. This job submission is an explicit write, just like ordinary `jobs submit`; it is not a management-command preview. Existing template resources, mounts, other parameters, and machine-selection defaults remain intact. Links and IPs are deduplicated by type and ID. Named license selections deliberately replace only those named parameter values.
+
+Job submission still requests SSH by default. Use `jobs submit --no-ssh`, `jobs submit-immediate --no-ssh`, or the Python helpers' `ssh_enabled=False` for web/VNC/batch applications that do not support SSH. Startup detection does not require an SSH endpoint when this is disabled. SSH transfer workflows continue to require SSH and are unchanged.
+
+Overrides retrieve the selected template with `includeApplication=true`. The resolved application must match its name/version, and the selected compute product must advertise an enabled backend. Additional links require application `allowPublicLink` and backend `web`; IPs require application `allowPublicIp`. License names must be declared `license_server` parameters. Resources must be visible in the configured workspace, READY, advertised by their provider, and on the same provider as the compute product. Links/IPs must have a known, unbound state. Licenses can be shared as permitted by UCloud. Payload types are `ingress`, `network`, and `license_server`, respectively. These are conservative preflight checks, not a guarantee of allocation, permission, or provider acceptance; missing/unsupported metadata fails closed. No new metadata requests occur on the unchanged default submission path.
+
+For deliberate per-run creation, Python integrations can use `ucloud_workflow.job_resources.run_with_job_resources`:
+
+```python
+from ucloud_workflow.job_resources import RunResourceRequest, run_with_job_resources
+from ucloud_workflow.jobs import wait_for_running_job
+
+def execute_and_download(launch):
+    job, ssh_command = wait_for_running_job(client, launch.job_id)
+    return my_transfer_and_extraction(job, ssh_command)
+
+result = run_with_job_resources(
+    client,
+    execute_and_download,
+    template_job_id=template_job_id,
+    hours=1,
+    existing={"links": [existing_link_id]},
+    requests=[RunResourceRequest("licenses", {"product": license_product}, "seat")],
+)
+```
+
+The example assumes an open `client`, a compatible template declaring the `seat` license parameter and allowing Public Links, approved license entitlement/product, and your own `my_transfer_and_extraction` callback. Supplying `requests` allocates real resources when called; there is no implicit CLI confirmation inside this Python helper. The callback owns startup waiting, execution, and download; the helper does not infer script completion from UCloud status. Without a `size` or `product` override, this low-level helper keeps the template machine.
+
+The helper validates all requested specs/application compatibility before creating anything, waits for READY, records created and explicitly reused IDs, submits one job, and invokes the callback. **It always requests termination of its own submitted job on callback completion or failure**, then attempts deletion only of confirmed resources it created in this invocation. Template resources, reused resources, and account SSH keys are never automatically deleted. Do not use this short-lived-run helper when you intend to keep the job or undownloaded outputs alive after the callback.
+
+`run_with_job_resources(..., ssh_enabled=False)` permits non-SSH applications such as the isolated web and VNC applications used in live validation. The default remains `True`; the callback must not call SSH helpers when SSH is disabled.
+
+`ManagedResourceRunResult` contains `value`, `operation_record`, and `cleanup_complete`. A successful termination request is not proof that provider unbinding has finished; bound/missing-binding resources are retained and reported as incomplete rather than forcibly detached or deleted. A cleanup failure does not replace the original callback/provisioning error; a safe note and the run journal identify incomplete recovery. Journals omit secrets/specifications but contain operational IDs, so keep them local. If job submission times out or has an ambiguous response, no submission retry occurs and created resources are retained: an unknown job may still use them. Unknown resource creations likewise need manual reconciliation. Python mutation helpers and operation journals are not an authentication boundary or a cross-process garbage collector.
+
+### Runtime attach and detach: deferred
+
+The upstream API defines `POST /api/jobs/attachResource` and `/detachResource` with a single `{jobId, resource}` object, not a bulk body. This CLI intentionally does not expose them yet. Product discovery has no per-resource runtime-effectiveness flag. In inspected upstream revision [`3d08e18`](https://github.com/SDU-eScience/UCloud/tree/3d08e18c539d364c127b898a147e40151c9708d8), the [container service](https://github.com/SDU-eScience/UCloud/blob/3d08e18c539d364c127b898a147e40151c9708d8/provider-integration/im2/pkg/integrations/k8s/containers/00_module.go) installs no attach/detach handlers, while the [KubeVirt handlers](https://github.com/SDU-eScience/UCloud/blob/3d08e18c539d364c127b898a147e40151c9708d8/provider-integration/im2/pkg/integrations/k8s/kubevirt/00_module.go) return success without implementing a runtime change. HTTP success alone therefore cannot establish that an application gained/lost a resource. A documented, effective provider/application contract and separately authorized live effect checks are required before exposing these commands. Select resources at job submission in the meantime.
+
+### Live machine availability
+
+```powershell
+uv run ucloud catalog machines --live --provider ucloud --category gpu-nvidia-b200 --json
+```
+
+`ucloud_workflow.availability.check_machine_availability(client, products=None)` performs one `GET /api/jobs/retrieveProducts` request and returns an `AvailabilitySnapshot` with an aware UTC check timestamp. Pass a sequence of complete product references to retain caller order and check exact sizes. Each machine reports the reference, `found`, `queue_status`, and supplied hardware fields. Missing products/statuses or unrecognized status values become `UNKNOWN`; failed/malformed requests remain errors. Provider/category collisions are not merged.
+
+`AVAILABLE`, `BUSY`, and `FULL` are advisory provider snapshots, not reservations or quota checks. No local availability cache or GPU-sizing policy is introduced. The static/offline catalog remains the default; live mode uses provider/category filters rather than static profile filters.
+
+### Opt-in immediate startup
+
+Create `candidates.json` as a non-empty array of full product references, in preference order. For example, explicitly approving only these two full-GPU sizes:
+
+```json
+[
+  {"id": "gpu-nvidia-b200-1-gpu", "category": "gpu-nvidia-b200", "provider": "ucloud"},
+  {"id": "gpu-nvidia-b200-2-gpu", "category": "gpu-nvidia-b200", "provider": "ucloud"}
+]
+```
+
+```powershell
+# Read-only preview; it does not create a job.
+uv run ucloud jobs submit-immediate --candidates .\candidates.json
+# Recheck and submit one approved product, with a startup deadline.
+uv run ucloud jobs submit-immediate --candidates .\candidates.json --yes --startup-timeout 120
+```
+
+Use a compatible `UCLOUD_TEMPLATE_JOB_ID` or `--profile`. Optional `--resources FILE` uses the same selection schema above. Python callers use `submit_immediate_job(client, products=approved_products, hours=1, template_job_id=..., startup_timeout_seconds=120)` from `ucloud_workflow.availability`.
+
+Each submission checks one fresh snapshot and chooses the first approved `AVAILABLE` product. `--allow-busy` / `allow_busy=True` explicitly permits BUSY in the same caller preference order; FULL, UNKNOWN, and missing products never qualify. Nothing is submitted if none qualifies. It never discovers alternative GPU counts, selects MIG automatically, resizes workloads, retries a POST, or tries another machine after startup fails. Budget values must be finite and positive.
+
+Startup polling caps each HTTP timeout to the remaining budget and accepts only observed RUNNING before the deadline; it does not wait for SSH or assert script completion. On deadline, terminal-before-running state, polling failure, or interruption, it immediately requests job termination. HTTP timeouts bound network operations, not a strict total wall-clock SLA; termination is also a bounded request and may fail. `ImmediateStartError` exposes `job_id` for caller recovery and `termination_succeeded` (request accepted, not proof of terminal state), without including operational IDs or raw HTTP bodies in its message. Interruptions preserve their original exception. After a successful startup, lifecycle/termination belongs to the caller. Existing submission commands do not acquire this policy by default.
+
+### Verification status and remaining integration
+
+Read-only discovery passed on 2026-10-19. With separate operator approval, disposable live-write tests were then performed on 2026-10-20 in the configured project, using `ucloud` and one-vCPU CPU jobs:
+
+| Capability | Live result |
+| --- | --- |
+| Public Links | Create, READY, label read-back, deletion, binding to an isolated Nginx job, and refusal to delete a bound link passed. |
+| License activations | `STATA-MP19.5-CBS` create/READY/labels/delete passed; Stata 19.5 reached RUNNING with a named `server_lic` license resource. |
+| Resource ACLs | READ grant and revoke passed for disposable links and licenses, with permission read-back. The temporary recipient project group contained no users and was deleted afterward. |
+| Account SSH keys | Temporary public-key registration, retrieve, duplicate detection, and deletion passed; the original working key was preserved. |
+| Existing-resource submission | An explicitly selected disposable license was bound to a running job and survived job termination, then was separately deleted by its test owner. |
+| Managed ownership/cleanup | Newly created link/license resources were cleaned up after successful callbacks; a deliberate pre-execution abort preserved the original error and stopped its job. |
+| Immediate startup | A live availability-selected CPU job reached RUNNING; a deliberately short startup deadline triggered termination, and terminal state was independently confirmed. |
+| SSH execution and output | A Python worker was uploaded and executed, produced `dummy.txt` in an isolated `/work` subdirectory, and the downloaded content matched. The job was stopped afterward. |
+| Public IPs/firewall | Creation was rejected with HTTP 402; the project's IP quota was zero. No IP was allocated. Successful IP create/readiness/firewall/ACL/label/delete and IP-aware job submission still need a nonzero allocation and an approved compatible template. No ports were opened. |
+| Public URL serving | A direct HTTPS probe returned 449 despite confirmed resource/job binding. HTTP application/session routing remains unverified; API binding is not proof of a working public website. |
+
+The live run found and reproduced forced SSH in the new higher-level helpers rejecting a web-only application with HTTP 400. The fix exposes an explicit SSH-off choice without changing existing defaults, with regression tests for both Python helpers and CLI commands. Web/license test jobs used isolated templates without existing file mounts; only disposable test data was used. Existing resources, account keys, project groups, and `.env` were preserved; independent final checks found no owned test resources or running test jobs. Local operational journals are retained under ignored `artifacts/`, without token secrets or retained temporary private keys.
+
+These results verify the exercised provider/products and scenarios, not every advertised SKU, provider, or failure mode. Live account-key revocation effects on already-running jobs remain unverified. Runtime attach/detach remains explicitly deferred for the provider-contract reason above. The static SSH transfer example and normal template-inheritance defaults remain unchanged.
+
 ## UCloud HTTP endpoints used by the CLI
 
 The CLI currently uses these endpoints:
@@ -556,6 +728,16 @@ The CLI currently uses these endpoints:
 - `GET /api/tokens/browse`
 - `GET /api/tokens/retrieveOptions`
 - `POST /api/tokens`
+- `GET /api/{ingresses|networkips|licenses}/browse`
+- `GET /api/{ingresses|networkips|licenses}/retrieve`
+- `GET /api/{ingresses|networkips|licenses}/retrieveProducts`
+- `POST` / `DELETE /api/{ingresses|networkips|licenses}`
+- `POST /api/{ingresses|networkips|licenses}/updateAcl`
+- `POST /api/{ingresses|networkips|licenses}/updateLabels`
+- `POST /api/networkips/firewall`
+- `GET /api/ssh/browse` and `GET /api/ssh/retrieve`
+- `POST /api/ssh` and `DELETE /api/ssh`
+- `GET /api/jobs/retrieveProducts`
 
 Required request headers:
 

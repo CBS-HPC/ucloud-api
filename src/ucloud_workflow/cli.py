@@ -26,6 +26,7 @@ from .jobs import (
 )
 from .scripts import ExtractionScriptSpec, write_extraction_script
 from .settings import Settings, SettingsError
+from .management_cli import emit, read_object, register_management_commands, safe_cli
 from .tokens import build_api_token_specification, summarize_api_tokens
 from .transfer import (
     RemotePythonJobSpec,
@@ -47,6 +48,7 @@ app.add_typer(delivery_app, name="delivery")
 app.add_typer(workflow_app, name="workflow")
 app.add_typer(catalog_app, name="catalog")
 app.add_typer(tokens_app, name="tokens")
+register_management_commands(app)
 
 console = rich.console.Console()
 
@@ -139,15 +141,18 @@ def wallets(
 
 
 @jobs_app.command("submit")
+@safe_cli
 def submit_job(
     size: str | None = typer.Option(None, help="UCloud CPU size, for example 128-vcpu"),
     product_id: str | None = typer.Option(None, help="Exact UCloud product id for CPU, GPU, or MIG"),
     product_category: str | None = typer.Option(None, help="Exact UCloud product category"),
     product_provider: str | None = typer.Option(None, help="Exact UCloud provider id"),
     use_template_product: bool = typer.Option(False, help="Keep the template machine instead of the default CPU size"),
+    ssh: bool = typer.Option(True, "--ssh/--no-ssh", help="Require SSH; disable for web-only or batch applications without SSH support"),
     hours: int | None = typer.Option(None, help="Time allocation in hours"),
     name: str | None = typer.Option(None, help="Optional job name"),
     profile: str | None = typer.Option(None, help="Standard job profile name, for example vscode-remote-session"),
+    resources: Path | None = typer.Option(None, exists=True, dir_okay=False, help="JSON selections of existing links, ips, and named licenses"),
     mount: list[str] = typer.Option([], "--mount", help="UCloud file or folder path to mount (repeatable)"),
     read_only_mount: list[str] = typer.Option(
         [],
@@ -176,9 +181,56 @@ def submit_job(
             mounts=mount,
             read_only_mounts=read_only_mount,
             template_job_id=template_job_id,
+            ssh_enabled=ssh,
+            **({"resource_selection": read_object(resources)} if resources is not None else {}),
         )
     console.print(f"Job submitted: {result.job_id}")
     console.print(f"Job URL: {result.job_url}")
+
+
+@jobs_app.command("submit-immediate")
+@safe_cli
+def submit_immediate(
+    candidates: Path = typer.Option(..., exists=True, dir_okay=False, help="JSON array of approved product references, in preference order"),
+    yes: bool = typer.Option(False, "--yes", help="Submit one approved product and stop it if startup misses its deadline"),
+    allow_busy: bool = typer.Option(False, help="Explicitly allow BUSY as well as AVAILABLE"),
+    startup_timeout: float = typer.Option(120, min=1, help="Startup deadline after submission, in seconds"),
+    poll_interval: float = typer.Option(2, min=0.1),
+    hours: int | None = typer.Option(None, min=1),
+    name: str | None = typer.Option(None),
+    profile: str | None = typer.Option(None),
+    resources: Path | None = typer.Option(None, exists=True, dir_okay=False),
+    ssh: bool = typer.Option(True, "--ssh/--no-ssh", help="Require SSH; disable for applications without SSH support"),
+) -> None:
+    """Preview live availability or submit exactly one caller-approved machine."""
+    from dataclasses import asdict
+
+    from .availability import check_machine_availability, choose_available_machine, submit_immediate_job
+    from .job_resources import resource_selection
+    from .resources import product_reference
+
+    products = json.loads(candidates.read_text(encoding="utf-8"))
+    if not isinstance(products, list) or not products:
+        raise ValueError("Candidates must be a non-empty JSON array of product references")
+    products = [product_reference(product) for product in products]
+    selected_resources = resource_selection(read_object(resources)) if resources is not None else None
+    settings = _load_settings()
+    with UCloudClient(settings) as client:
+        if not yes:
+            snapshot = check_machine_availability(client, products=products)
+            chosen = choose_available_machine(snapshot, allow_busy=allow_busy)
+            emit({"preview": True, "availability": asdict(snapshot),
+                  "selected_product": chosen.product if chosen else None,
+                  "warning": "Advisory only; --yes checks again before submitting. No job was submitted."})
+            return
+        result = submit_immediate_job(
+            client, products=products, hours=hours if hours is not None else settings.default_hours,
+            template_job_id=_resolve_template_job_id(settings, profile), name=name, allow_busy=allow_busy,
+            startup_timeout_seconds=startup_timeout, poll_interval_seconds=poll_interval,
+            resource_selection=selected_resources,
+            ssh_enabled=ssh,
+        )
+        emit(asdict(result))
 
 
 @jobs_app.command("wait")
@@ -681,8 +733,39 @@ def list_template_jobs() -> None:
 @catalog_app.command("machines")
 def list_machines(
     profile: str | None = typer.Option(None, help="Optional standard job profile to filter machine types"),
+    live: bool = typer.Option(False, "--live", help="Query provider queue status instead of the static catalog"),
+    provider: str | None = typer.Option(None, help="Live API provider id"),
+    category: str | None = typer.Option(None, help="Live product category"),
+    as_json: bool = typer.Option(False, "--json", help="Print machine-readable output"),
 ) -> None:
     """List the known machine types documented by UCloud."""
+    if live:
+        from dataclasses import asdict
+        from .availability import check_machine_availability
+        from .resources import ManagementError
+        if profile is not None:
+            raise typer.BadParameter("--live does not use static profile filters; use --provider/--category")
+        try:
+            with UCloudClient(_load_settings()) as client:
+                snapshot = check_machine_availability(client)
+        except ManagementError as error:
+            console.print(str(error))
+            raise typer.Exit(1) from None
+        rows = [asdict(machine) for machine in snapshot.machines
+                if (provider is None or machine.product["provider"] == provider)
+                and (category is None or machine.product["category"] == category)]
+        if as_json:
+            typer.echo(json.dumps({"checked_at": snapshot.checked_at, "machines": rows}, indent=2))
+        else:
+            table = rich.table.Table(title="Live capacity snapshot (not a reservation)")
+            for field in ("Product", "Category", "Provider", "Queue status"):
+                table.add_column(field)
+            for row in rows:
+                table.add_row(row["product"]["id"], row["product"]["category"], row["product"]["provider"], row["queue_status"])
+            console.print(table)
+        return
+    if provider is not None or category is not None or as_json:
+        raise typer.BadParameter("--provider, --category, and --json require --live")
     if profile is not None:
         resolved_profile = profile_by_name(profile)
         if resolved_profile is None:

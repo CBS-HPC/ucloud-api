@@ -191,8 +191,16 @@ def submit_job_from_latest_template(
     mounts: list[str] | None = None,
     read_only_mounts: list[str] | None = None,
     template_job_id: str | None = None,
+    resource_selection: Mapping[str, Any] | None = None,
 ) -> JobLaunchResult:
-    template = template_job_specification(client, template_job_id=template_job_id)
+    template_job = None
+    if resource_selection is not None:
+        from .job_resources import template_with_application
+
+        template_job = template_with_application(client, template_job_id)
+        template = template_job["specification"]
+    else:
+        template = template_job_specification(client, template_job_id=template_job_id)
     specification = build_job_specification(
         template,
         size=size,
@@ -203,6 +211,12 @@ def submit_job_from_latest_template(
         mounts=mounts,
         read_only_mounts=read_only_mounts,
     )
+    if template_job is not None:
+        from .job_resources import application_for_resources, merge_job_resources
+
+        specification = merge_job_resources(
+            client, specification, resource_selection, application_for_resources(template_job, specification),
+        )
     submission = client.submit_job(specification)
     job_id = extract_job_id(submission)
     return JobLaunchResult(
