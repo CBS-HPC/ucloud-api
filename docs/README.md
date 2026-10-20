@@ -6,6 +6,7 @@ For the installed command and option list, run `uv run ucloud --help`.
 
 ## Guides
 
+- [Configure from a token and create a storage folder](reference/api.md#token-based-setup)
 - [Run a Python workload and create a delivery bundle](guides/run-and-deliver.md)
 - [Manage UCloud API tokens](guides/token-management.md)
 

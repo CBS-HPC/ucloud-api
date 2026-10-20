@@ -11,7 +11,15 @@ uv sync --group dev
 uv run ucloud --help
 ```
 
-Create a local `.env` file with:
+To configure from just a valid API token, run:
+
+```powershell
+uv run ucloud setup
+```
+
+Enter the token at the hidden prompt, select the project, writable drive, and reusable template job, then confirm. Setup creates or reuses `/<drive-id>/ucloud-workflow` and saves a local `.env`, preserving unrelated settings. It does not submit jobs, register SSH keys, or change mounts. The token is stored in plaintext locally; never commit it. See [token-based setup](docs/reference/api.md#token-based-setup) for explicit options and limitations.
+
+Alternatively, create a local `.env` file manually:
 
 ```text
 UCLOUD_TOKEN=<token secret>
@@ -20,6 +28,8 @@ UCLOUD_TEMPLATE_JOB_ID=<known-good UCloud template job>
 ```
 
 The selected template job supplies mounted drives, application/container settings, SSH behavior, and baseline job configuration. Direct `--mount` flags are experimental and unverified.
+
+`UCLOUD_STORAGE_PATH` identifies persistent UCloud storage; it is not an in-job `/work/...` path and does not automatically mount anything. Fresh setup uses `/work` as its working root unless you supply `--work-folder`; existing working-root settings are preserved.
 
 After UCloud reports a job as running, the CLI first probes the SSH endpoint before creating its remote workspace. SSH and SCP use noninteractive, bounded commands and explicitly use `UCLOUD_SSH_CONFIG_PATH` (default: `~/.ssh/config`); a pre-execution transport timeout terminates the submitted job. Set `UCLOUD_SSH_IDENTITY_FILE` only when the private key is not beside that config file.
 
@@ -65,7 +75,7 @@ uv run ucloud tokens status --within-days 30
 
 `ucloud jobs submit --resources resources.json` selects existing links, IPs, and named application licenses while preserving the template. `ucloud jobs submit-immediate --candidates candidates.json` previews caller-approved machines; add `--yes` to submit one and terminate it if startup misses the deadline. Both commands accept `--no-ssh` for applications without SSH support. See [job resources](docs/reference/api.md#job-resource-selection-and-owned-cleanup) and [immediate startup](docs/reference/api.md#opt-in-immediate-startup).
 
-Live tests cover links, CBS Stata-license activations, SSH-key registration/deletion, resource-aware CPU jobs, owned cleanup, and startup cancellation. Public-IP creation was rejected by the project's zero quota; IP/firewall success and public-URL serving remain unverified. See [verification status](docs/reference/api.md#verification-status-and-remaining-integration).
+Live tests cover setup-folder creation/reuse and configuration saving, links, CBS Stata-license activations, SSH-key registration/deletion, resource-aware CPU jobs, owned cleanup, and startup cancellation. Public-IP creation was rejected by the project's zero quota; IP/firewall success and public-URL serving remain unverified. See [verification status](docs/reference/api.md#verification-status-and-remaining-integration).
 
 Job-launching commands keep the existing CPU default unless you choose an explicit product with `--product-id`, `--product-category`, and `--product-provider`, or use `--use-template-product` to retain the template's machine. CPU, full GPU, and MIG products use the same workflow; the operator or calling integration chooses the machine. See [machine selection](docs/reference/api.md#machine-selection).
 

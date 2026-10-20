@@ -20,10 +20,57 @@ Optional:
 - `UCLOUD_SSH_CONFIG_PATH` - SSH config path used by every CLI SSH/SCP command; defaults to `~/.ssh/config`
 - `UCLOUD_SSH_IDENTITY_FILE` - optional explicit private-key path; otherwise the CLI adds existing standard private keys beside `UCLOUD_SSH_CONFIG_PATH` to its managed SSH block
 - `UCLOUD_WORK_FOLDER` - remote working root, defaults to `/work/moody_agent`
+- `UCLOUD_STORAGE_PATH` - optional persistent storage directory used by `ucloud setup`; this is a UCloud `/<drive-id>/folder` path, not an automatic job mount or a `/work/...` path
 - `UCLOUD_DEFAULT_SIZE` - default CPU size, for example `128-vcpu`
 - `UCLOUD_DEFAULT_HOURS` - default job duration in hours
 - `UCLOUD_OUTPUT_DIR` - default local output directory for packaging
 - `UCLOUD_DELIVERY_ROOT` - default local delivery archive root
+
+## Token-based setup
+
+```powershell
+uv run ucloud setup
+```
+
+Setup is the exception to the usual requirement for both token and project: it starts with only a valid API token. Enter it at the hidden prompt, or supply it through `UCLOUD_TOKEN` in the process environment or selected environment file. There is deliberately no setup `--token` flag that would put the secret in shell history. The default server is `https://cloud.sdu.dk`; an override must be an HTTPS origin without embedded credentials, path, query, or fragment.
+
+The command:
+
+1. Browses accessible projects without a `Project` header. Archived projects and projects explicitly marked unable to consume resources are excluded.
+2. Selects a project by id or unique title and discovers its accessible writable drives. Drive permissions must include EDIT or ADMIN, and provider support must explicitly indicate a writable filesystem.
+3. Retrieves an explicitly configured template, or offers existing jobs in that project as template candidates. Existing `UCLOUD_TEMPLATE_JOB_ID` is retained and verified, not silently replaced by the latest job. If there are no candidates, setup can still configure storage but explains that a known-good template is needed before running jobs.
+4. Previews the target directory, defaulting to `/<drive-id>/ucloud-workflow`. An explicit `--storage-path` or existing `UCLOUD_STORAGE_PATH` is used instead. Paths outside the selected drive, drive roots, traversal, and control characters are rejected.
+5. Asks for confirmation before any write. It creates missing directories in parent order with `conflictPolicy: REJECT`, verifies them, and reuses existing writable directories. Existing files are never replaced or renamed. Concurrent creation is reconciled by checking the exact directory again.
+6. Atomically saves `UCLOUD_SERVER`, the supplied `UCLOUD_TOKEN`, the canonical project id, `UCLOUD_STORAGE_PATH`, `UCLOUD_WORK_FOLDER`, and a selected `UCLOUD_TEMPLATE_JOB_ID`. Other settings and comments are preserved. Changed/symlinked environment files are not overwritten.
+
+When multiple choices exist, interactive setup asks for a selection; it never treats the first result as an implicit default. With `--yes`, ambiguous choices fail unless you supply the corresponding explicit option:
+
+```powershell
+# Set UCLOUD_TOKEN securely in this process first, or use the interactive prompt.
+uv run ucloud setup `
+  --project PROJECT_ID `
+  --drive-id DRIVE_ID `
+  --template-job-id TEMPLATE_JOB_ID `
+  --storage-path /DRIVE_ID/workloads `
+  --work-folder /work/ALREADY_MOUNTED_FOLDER/workloads `
+  --yes
+```
+
+Omit `--storage-path` to use the default folder. Use `--env-file custom.env` to read/update a different local file. Setup does not load an unrelated `.env` or modify the current process environment. Process environment values take precedence over file values, and explicit selection options take precedence over both. Subsequent commands still load `.env` in the current directory; they do not automatically use a custom filename.
+
+**Storage is not automatically mounted.** Setup does not add, remove, or edit template resources or change existing job defaults. Choose a known-good template with the needed drive already mounted. `--work-folder` is the separate Linux path inside that job; setup cannot infer or verify that mapping from the storage path. Existing `UCLOUD_WORK_FOLDER` is retained, while fresh setup defaults to the always-present `/work`. A created storage folder is not proof that job outputs will be written there: configure the correct template mount and working path first. SSH private keys cannot be retrieved from the API; use your existing local key/config and `ucloud ssh-keys check` before an SSH workflow. No keys are generated or registered by setup.
+
+The token is never printed by setup, but saving it means storing plaintext in the environment file. New/replaced files use owner-only mode on POSIX; on Windows they inherit the destination directory's access controls. Keep the file private and outside version control. The repository ignores `.env`, `*.env`, `.env.*`, and setup temporary files; installed users must apply equivalent exclusions in their own repositories.
+
+Authentication, listing, provider, and permission failures are errors, not evidence of an empty workspace. Some providers return HTTP 400 for a missing directory; setup requires a successful paginated parent listing before interpreting that ambiguous response as absence. HTTP 503 remains an error; it never silently changes to another drive. Folder POST timeouts and server failures are not retried automatically. Rerun setup to inspect the deterministic target path before another create attempt. If a folder was created but saving configuration failed, it is retained for reuse rather than deleted; existing configuration remains intact. Setup does not clean up folders, allocate drives, alter ACLs, submit jobs, or broaden token permissions.
+
+Live checks on 2026-10-20 verified project discovery, writable-drive discovery, template validation, and folder previews on six reachable drives. Three other advertised drives returned provider HTTP 503. A separately approved smoke test then selected the writable drive already used by the configured template and created a unique parent folder plus a nested workspace. Both directories were read back; configuration was saved into a disposable local environment file. A second `ucloud setup` reused that configuration and directory without remote writes, preserving an unrelated setting and comment. The working `.env`, existing template, and unrelated drive contents were unchanged; no jobs were submitted. Creation/reuse races, cancellation, failure recovery, and unsafe-path rejection also have mocked/local regression coverage.
+
+Test cleanup moved only the owned, empty test tree into UCloud Trash and removed the disposable local environment file. Direct permanent file deletion returned HTTP 400, so permanent deletion is not claimed and shared Trash was not emptied. This is an operational cleanup limitation, not a setup deletion feature: setup does not delete folders or empty Trash.
+
+The reusable functions are in `ucloud_workflow.setup`: `list_projects(client)`, `list_writable_drives(client)`, `storage_directory_path(drive_id, path=None)`, `prepare_storage_directory(client, path, create=False)`, `template_candidates(client)`, `validate_template(client, template_job_id)`, and `write_setup_env(path, values, original=...)`. `prepare_storage_directory` is read-only unless `create=True`; it returns missing/created paths. Python mutation calls do not inherit CLI confirmation prompts.
+
+Upstream contracts: [projects](https://github.com/SDU-eScience/UCloud/blob/3d08e18c539d364c127b898a147e40151c9708d8/provider-integration/shared/pkg/foundation/projects.go), [drives](https://github.com/SDU-eScience/UCloud/blob/3d08e18c539d364c127b898a147e40151c9708d8/provider-integration/shared/pkg/orchestrators/drives.go), and [files](https://github.com/SDU-eScience/UCloud/blob/3d08e18c539d364c127b898a147e40151c9708d8/provider-integration/shared/pkg/orchestrators/files.go).
 
 ## SSH configuration
 
@@ -63,6 +110,7 @@ Important fields:
 - `delivery_root`
 - `ssh_config_path`
 - `ssh_identity_file`
+- `storage_path`
 
 #### `Settings.from_env(...) -> Settings`
 
@@ -165,17 +213,22 @@ The MIG ladder currently includes:
 
 Thin HTTP client for the UCloud endpoints used by the CLI.
 
-Uses these headers on every request:
+Uses these headers:
 
 - `Authorization: Bearer <token>`
-- `Project: <project>`
+- `Project: <project>` when nonempty; token-only discovery uses `Settings(..., project="")` to omit this header
 - `Accept: application/json`
 
 #### Methods
 
 - `request(method, path, params=None, json=None)`
 - `browse_wallets(include_children=True)`
-- `browse_jobs(items_per_page=1, sort_by="CREATED_AT", include_parameters=True)`
+- `browse_jobs(items_per_page=1, sort_by="CREATED_AT", include_parameters=True, include_application=False, next_page=None)`
+- `browse_projects(items_per_page=100, next_page=None)`
+- `browse_drives(items_per_page=100, next_page=None)` - includes filesystem-support metadata
+- `retrieve_file(path)`
+- `browse_files(path, items_per_page=100, next_page=None)`
+- `create_folder(path)` - one bulk item with `conflictPolicy: REJECT`; this low-level method performs a write without an interactive prompt
 - `retrieve_job(job_id, include_updates=True)`
 - `submit_job(specification)`
 - `terminate_job(job_id)`
@@ -417,6 +470,7 @@ Run the commands with `uv run`.
 
 ### Root commands
 
+- `ucloud setup`
 - `ucloud wallets`
 - `ucloud jobs submit`
 - `ucloud jobs wait`
@@ -717,6 +771,12 @@ The live run found and reproduced forced SSH in the new higher-level helpers rej
 These results verify the exercised provider/products and scenarios, not every advertised SKU, provider, or failure mode. Live account-key revocation effects on already-running jobs remain unverified. Runtime attach/detach remains explicitly deferred for the provider-contract reason above. The static SSH transfer example and normal template-inheritance defaults remain unchanged.
 
 ## UCloud HTTP endpoints used by the CLI
+
+- `GET /api/projects/v2/browse`
+- `GET /api/files/collections/browse`
+- `GET /api/files/retrieve`
+- `GET /api/files/browse`
+- `POST /api/files/folder`
 
 The CLI currently uses these endpoints:
 

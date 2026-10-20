@@ -19,6 +19,13 @@
 
 ## Infrastructure
 
+- [x] Add token-based setup with project/drive/template discovery, a default storage directory, confirmed writes, secret-safe output, and atomic preservation of existing configuration
+  - `ucloud setup` creates/reuses `/<drive-id>/ucloud-workflow` or an explicit `UCLOUD_STORAGE_PATH`. It does not change template mounts or infer their `/work/...` mapping; existing SSH transfer examples and job defaults remain unchanged.
+  - Read-only live checks on 2026-10-20 verified project/drive discovery, the configured template, and folder previews on six reachable drives. Three advertised drives returned provider HTTP 503; no automatic fallback or live writes were performed.
+  - Setup tests cover interactive/noninteractive selection, non-destructive folder creation, recovery, and quoted Windows-path compatibility. Wheel/sdist privacy and isolated installation checks pass.
+- [x] Live-test `ucloud setup` folder creation and rerun/reuse on an explicitly selected writable drive, plus saving configuration into a disposable local environment file
+  - Verified on 2026-10-20 using the writable drive already selected by the configured template: nested folder creation/read-back, configuration roundtrip with an unrelated setting/comment preserved, and rerun/reuse without extra remote writes. `.env` and existing data were preserved, no jobs were submitted, and the disposable local environment file was removed. This was not mount validation.
+  - Only the owned empty test tree was moved to UCloud Trash. Permanent file deletion returned HTTP 400; shared Trash was not emptied. Setup does not expose deletion or automatic cleanup.
 - [x] Add a reusable catalog of `UCLOUD_TEMPLATE_JOB_ID` values by job family
 - [x] Add a standard job profile registry for common workload types
 - [x] Add a static machine-capability catalog (live availability is planned separately below)
@@ -105,7 +112,7 @@ Remaining gates: obtain a nonzero Public-IP allocation before successful IP/fire
 - [ ] If required, verify SSH-key deletion/revocation effects on an already-running job using only a disposable key
   - Account registration/retrieve/duplicate detection/delete passed; provider revocation propagation to existing jobs was not exercised. Preserve the working key.
 - [x] Keep the static SSH transfer smoke test working and run the full regression suite
-  - Final local verification: 207 tests pass (101 original regression tests plus 106 added management/integration/policy tests). The static example and transfer implementation are unchanged.
+  - Release 0.1.7 verification: 207 tests passed (101 original regression tests plus 106 added management/integration/policy tests). The static example and transfer implementation were unchanged.
   - Wheel and sdist build successfully; archive contents and relative documentation links pass checks. Isolated wheel installation, dependency compatibility, and nine CLI help/version checks pass. OneDrive blocked an in-workspace install with hardlink/file-lock errors; copy-mode installation outside OneDrive passed without a package-code workaround.
 - [x] Update `docs/reference/api.md`, existing SSH operations guidance, and relevant README/TODO entries with examples, security notes, ownership rules, and precisely verified capabilities
   - Prepare a release only after validation; commit/push/publication remain a separate explicit request.

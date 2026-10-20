@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+## 0.1.8 - 2026-10-20
+
+- Added `ucloud setup`: hidden token input, paginated project/drive/template discovery, explicit choices, confirmed storage-folder creation/reuse, and atomic environment-file updates without changing template mounts or registering SSH keys.
+- Added optional `UCLOUD_STORAGE_PATH` metadata, token-only client discovery without a Project header, file browse/retrieve/create calls, and backward-compatible job-browse pagination.
+- Setup keeps secrets out of output, rejects unsafe paths, verifies write access, distinguishes ambiguous missing-folder HTTP 400 responses using parent listings, and does not retry ambiguous folder POSTs.
+- Live-tested nested storage-folder creation, read-back, configuration saving into a disposable environment file, and a second setup run that reused the folder without additional remote writes. Existing `.env`, template settings, and unrelated data were preserved; no jobs were submitted.
+- The empty, owned test tree was moved to UCloud Trash after verification. Permanent file deletion returned HTTP 400; shared Trash was not emptied. Setup itself never deletes folders or changes mounts.
+
 ## 0.1.7 - 2026-10-20
 
 - Added read-only discovery and explicit, preview-first management commands for Public Links, Public IPs, software-license activations, and account SSH public keys.

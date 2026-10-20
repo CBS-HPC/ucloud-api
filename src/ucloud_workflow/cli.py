@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from pathlib import Path
 import json
+import os
 
 import httpx
 import rich.console
@@ -25,7 +26,7 @@ from .jobs import (
     wait_for_running_job,
 )
 from .scripts import ExtractionScriptSpec, write_extraction_script
-from .settings import Settings, SettingsError
+from .settings import Settings, SettingsError, read_dotenv
 from .management_cli import emit, read_object, register_management_commands, safe_cli
 from .tokens import build_api_token_specification, summarize_api_tokens
 from .transfer import (
@@ -119,6 +120,108 @@ def _load_json_file(path: Path, *, expected_type: type, description: str):
 def version() -> None:
     """Print the installed package version."""
     console.print(f"ucloud-workflow {__version__}")
+
+
+@app.command("setup")
+@safe_cli
+def setup_command(
+    env_file: Path = typer.Option(Path(".env"), help="Environment file to create or update without discarding other settings"),
+    server: str | None = typer.Option(None, help="HTTPS UCloud server origin"),
+    project: str | None = typer.Option(None, help="Accessible project id or unique title"),
+    drive_id: str | None = typer.Option(None, help="Writable drive id in the selected workspace"),
+    storage_path: str | None = typer.Option(None, help="UCloud storage path; defaults to /<drive-id>/ucloud-workflow"),
+    template_job_id: str | None = typer.Option(None, help="Existing job to reuse; otherwise discover and select one"),
+    work_folder: str | None = typer.Option(None, help="Separate in-job path; preserved if configured, otherwise /work"),
+    yes: bool = typer.Option(False, "--yes", help="Confirm folder creation and saving the token locally; ambiguous choices still require explicit options"),
+) -> None:
+    """Configure from a token, discover project/drives/templates, and ensure a storage folder."""
+    from .setup import (
+        list_projects, list_writable_drives, prepare_storage_directory, storage_directory_path,
+        template_candidates, validate_server, validate_template, write_setup_env,
+    )
+
+    if env_file.is_symlink() or not env_file.parent.is_dir():
+        raise ValueError("Choose an environment file in an existing directory, not a symlink")
+    original = env_file.read_text(encoding="utf-8-sig") if env_file.exists() else None
+    configured = read_dotenv(env_file)
+
+    def setting(name: str) -> str | None:
+        return os.getenv(name) or configured.get(name) or None
+
+    def choose(items: list[dict], requested: str | None, label: str, option: str) -> dict:
+        if requested is not None:
+            matches = [item for item in items if str(item["id"]) == requested]
+            if not matches and option == "--project":
+                matches = [item for item in items if item["specification"].get("title") == requested]
+            if len(matches) != 1:
+                raise ValueError(f"{label} is inaccessible or ambiguous; supply a unique {option}")
+            return matches[0]
+        if not items:
+            raise ValueError(f"No eligible {label.lower()} found; check token scope and workspace permissions")
+        if len(items) == 1:
+            return items[0]
+        if yes:
+            raise ValueError(f"Multiple {label.lower()} choices; supply {option} explicitly with --yes")
+        for index, item in enumerate(items, 1):
+            specification = item.get("specification") or {}
+            title = specification.get("title") or specification.get("name") or (specification.get("application") or {}).get("name") or "Untitled"
+            typer.echo(f"{index}. {title} [{item['id']}]")
+        selected = typer.prompt(f"Select {label.lower()} (number)", type=int)
+        if not 1 <= selected <= len(items):
+            raise ValueError("Selection must be one of the displayed numbers")
+        return items[selected - 1]
+
+    resolved_server = validate_server(server or setting("UCLOUD_SERVER") or "https://cloud.sdu.dk")
+    token = setting("UCLOUD_TOKEN")
+    if token is None:
+        if yes:
+            raise ValueError("Set UCLOUD_TOKEN or run setup interactively to enter the token securely")
+        token = typer.prompt("UCloud API token", hide_input=True)
+    if not token or any(character.isspace() for character in token):
+        raise ValueError("The API token must be a nonempty value without whitespace")
+    with UCloudClient(Settings(server=resolved_server, token=token, project="")) as discovery:
+        selected_project = choose(list_projects(discovery), project or setting("UCLOUD_PROJECT"), "Project", "--project")
+    settings = Settings(server=resolved_server, token=token, project=str(selected_project["id"]))
+    with UCloudClient(settings) as client:
+        requested_path = storage_path if storage_path is not None else setting("UCLOUD_STORAGE_PATH")
+        inferred_drive = requested_path.split("/")[1] if requested_path and requested_path.startswith("/") else None
+        selected_drive = choose(list_writable_drives(client), drive_id or inferred_drive, "Drive", "--drive-id")
+        target = storage_directory_path(str(selected_drive["id"]), requested_path)
+        selected_template = template_job_id or setting("UCLOUD_TEMPLATE_JOB_ID")
+        if not selected_template:
+            candidates = template_candidates(client)
+            if candidates:
+                selected_template = str(choose(candidates, None, "Template job", "--template-job-id")["id"])
+        if selected_template:
+            validate_template(client, selected_template)
+        resolved_work_folder = work_folder or setting("UCLOUD_WORK_FOLDER") or "/work"
+        if (not resolved_work_folder.startswith("/") or "\\" in resolved_work_folder
+                or any(part in {".", ".."} for part in resolved_work_folder.split("/"))
+                or any(ord(character) < 32 for character in resolved_work_folder)):
+            raise ValueError("Work folder must be an absolute in-job Linux path without traversal")
+        values = {
+            "UCLOUD_SERVER": resolved_server, "UCLOUD_TOKEN": token, "UCLOUD_PROJECT": settings.project,
+            "UCLOUD_STORAGE_PATH": target, "UCLOUD_WORK_FOLDER": resolved_work_folder,
+        }
+        if selected_template:
+            values["UCLOUD_TEMPLATE_JOB_ID"] = selected_template
+        missing = prepare_storage_directory(client, target)
+        emit({"project": selected_project["specification"].get("title"), "project_id": settings.project,
+              "drive_id": selected_drive["id"], "storage_path": target, "missing_directories": list(missing),
+              "template_job_id": selected_template, "work_folder": resolved_work_folder,
+              "env_file": str(env_file), "token": "[hidden]"})
+        typer.echo("Storage is not automatically mounted. Template mounts are unchanged; --work-folder is a separate in-job path.")
+        if not selected_template:
+            typer.echo("No reusable template found. Create a known-good job in UCloud and configure UCLOUD_TEMPLATE_JOB_ID before running jobs.")
+        if not yes and not typer.confirm("Create missing storage folders and save the token in this local environment file?", default=False):
+            typer.echo("Cancelled; no storage or configuration changes made.")
+            return
+        prepare_storage_directory(client, target, create=True)
+        try:
+            write_setup_env(env_file, values, original=original)
+        except (OSError, ValueError):
+            raise SettingsError("Storage folder verified, but configuration was not saved; rerun setup to reuse the folder") from None
+    typer.echo("Setup complete. Storage folder verified and local configuration saved; no job was submitted.")
 
 
 @app.command()

@@ -26,7 +26,7 @@ class UCloudClient:
             timeout=timeout,
             headers={
                 "Authorization": f"Bearer {settings.token}",
-                "Project": settings.project,
+                **({"Project": settings.project} if settings.project else {}),
                 "Accept": "application/json",
             },
         )
@@ -72,6 +72,7 @@ class UCloudClient:
         sort_by: str = "CREATED_AT",
         include_parameters: bool = True,
         include_application: bool = False,
+        next_page: str | None = None,
     ) -> dict[str, Any]:
         return self.request(
             "GET",
@@ -81,6 +82,7 @@ class UCloudClient:
                 "sortBy": sort_by,
                 "includeParameters": str(include_parameters).lower(),
                 **({"includeApplication": "true"} if include_application else {}),
+                **({"next": next_page} if next_page is not None else {}),
             },
         ).json()
 
@@ -197,3 +199,30 @@ class UCloudClient:
 
     def retrieve_compute_products(self) -> dict[str, Any]:
         return self.request("GET", "/api/jobs/retrieveProducts").json()
+
+    def browse_projects(self, *, items_per_page: int = 100, next_page: str | None = None) -> dict[str, Any]:
+        return self.request("GET", "/api/projects/v2/browse", params={
+            "itemsPerPage": items_per_page,
+            **({"next": next_page} if next_page is not None else {}),
+        }).json()
+
+    def browse_drives(self, *, items_per_page: int = 100, next_page: str | None = None) -> dict[str, Any]:
+        return self.request("GET", "/api/files/collections/browse", params={
+            "itemsPerPage": items_per_page, "includeSupport": "true",
+            **({"next": next_page} if next_page is not None else {}),
+        }).json()
+
+    def retrieve_file(self, path: str) -> dict[str, Any]:
+        return self.request("GET", "/api/files/retrieve", params={"id": path}).json()
+
+    def browse_files(self, path: str, *, items_per_page: int = 100, next_page: str | None = None) -> dict[str, Any]:
+        return self.request("GET", "/api/files/browse", params={
+            "path": path, "itemsPerPage": items_per_page,
+            **({"next": next_page} if next_page is not None else {}),
+        }).json()
+
+    def create_folder(self, path: str) -> dict[str, Any]:
+        response = self.request("POST", "/api/files/folder", json={
+            "items": [{"id": path, "conflictPolicy": "REJECT"}],
+        })
+        return response.json() if response.content else {}

@@ -3,6 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from pathlib import Path
 import os
+import re
 
 from .catalog import resolve_template_job_id
 
@@ -59,18 +60,31 @@ def discover_ssh_identity_files(config_path: Path) -> tuple[Path, ...]:
     )
 
 
-def _load_dotenv(path: Path = Path(".env")) -> None:
+def read_dotenv(path: Path = Path(".env")) -> dict[str, str]:
     if not path.exists():
-        return
+        return {}
 
-    for raw_line in path.read_text(encoding="utf-8").splitlines():
+    values = {}
+    for raw_line in path.read_text(encoding="utf-8-sig").splitlines():
         line = raw_line.strip()
         if not line or line.startswith("#") or "=" not in line:
             continue
         key, value = line.split("=", 1)
-        key = key.strip()
-        if key and key not in os.environ:
-            os.environ[key] = value.strip().strip('"').strip("'")
+        key = key.removeprefix("export ").strip()
+        value = value.strip()
+        if len(value) >= 2 and value[0] == value[-1] and value[0] in {"'", '"'}:
+            quote = value[0]
+            value = value[1:-1]
+            if quote == '"':
+                value = re.sub(r'\\(["\\])', r'\1', value)
+        if key:
+            values.setdefault(key, value)
+    return values
+
+
+def _load_dotenv(path: Path = Path(".env")) -> None:
+    for key, value in read_dotenv(path).items():
+        os.environ.setdefault(key, value)
 
 
 @dataclass(frozen=True, slots=True)
@@ -87,6 +101,7 @@ class Settings:
     delivery_root: Path = Path("deliveries")
     ssh_config_path: Path = Path.home() / ".ssh" / "config"
     ssh_identity_file: Path | None = None
+    storage_path: str | None = None
 
     @classmethod
     def from_env(
@@ -104,6 +119,7 @@ class Settings:
         delivery_root: Path | None = None,
         ssh_config_path: Path | None = None,
         ssh_identity_file: Path | None = None,
+        storage_path: str | None = None,
     ) -> "Settings":
         _load_dotenv()
         resolved_server = server or os.getenv("UCLOUD_SERVER", "https://cloud.sdu.dk")
@@ -140,6 +156,7 @@ class Settings:
             ssh_identity_file=ssh_identity_file or _env_optional_path(
                 "UCLOUD_SSH_IDENTITY_FILE"
             ),
+            storage_path=storage_path if storage_path is not None else _env_optional("UCLOUD_STORAGE_PATH"),
         )
 
     def template_job_id_for(self, profile_name: str | None = None) -> str | None:

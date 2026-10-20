@@ -1,4 +1,4 @@
-from ucloud_workflow.settings import Settings
+from ucloud_workflow.settings import Settings, read_dotenv
 
 
 def test_settings_template_job_id_picks_up_optional_env_value(tmp_path, monkeypatch) -> None:
@@ -8,6 +8,22 @@ def test_settings_template_job_id_picks_up_optional_env_value(tmp_path, monkeypa
     settings = Settings.from_env(token="token", project="Moody's Datahub")
 
     assert settings.template_job_id == "job-abc123"
+
+
+def test_dotenv_preserves_literal_windows_paths_and_apostrophes(tmp_path):
+    path = tmp_path / ".env"
+    path.write_text('UCLOUD_SSH_CONFIG_PATH="C:\\temp"\nUCLOUD_PROJECT="Example\'s project"\n', encoding="utf-8")
+    values = read_dotenv(path)
+    assert values["UCLOUD_SSH_CONFIG_PATH"] == "C:\\temp"
+    assert values["UCLOUD_PROJECT"] == "Example's project"
+
+
+def test_dotenv_does_not_interpret_windows_control_escapes_or_change_duplicate_precedence(tmp_path):
+    path = tmp_path / ".env"
+    path.write_text('UCLOUD_SSH_CONFIG_PATH="C:\\temp\\\\new"\nUCLOUD_PROJECT=first\nUCLOUD_PROJECT=second\n', encoding="utf-8")
+    values = read_dotenv(path)
+    assert values["UCLOUD_SSH_CONFIG_PATH"] == "C:\\temp\\new"
+    assert values["UCLOUD_PROJECT"] == "first"
 
 
 def test_settings_template_job_id_is_loaded_from_dotenv_file(tmp_path, monkeypatch) -> None:

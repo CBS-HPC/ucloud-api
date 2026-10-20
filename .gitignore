@@ -1,5 +1,8 @@
 .venv/
 .env
+*.env
+.env.*
+.ucloud-setup-*
 kristoffer_test.env
 __pycache__/
 .pytest_cache/
